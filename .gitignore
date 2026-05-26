@@ -1,0 +1,28 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and builds
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Supabase local state
+.branches/
+.temp/
+supabase/.temp/
+
+# Local planning docs not intended for GitHub yet
+docs/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
