@@ -7,6 +7,9 @@
 node_modules/
 dist/
 build/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 
 # Logs
 *.log
@@ -21,6 +24,10 @@ supabase/.temp/
 
 # Local planning docs not intended for GitHub yet
 docs/
+
+# Apps Script local credentials
+.clasp.json
+.clasprc.json
 
 # OS/editor files
 .DS_Store
