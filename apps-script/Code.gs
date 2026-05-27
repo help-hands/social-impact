@@ -7,7 +7,7 @@ function doGet() {
   return jsonResponse({
     ok: true,
     service: 'social-impact-apps-script',
-    actions: ['setupDriveFolders', 'uploadDocument', 'createSnapshot'],
+    actions: ['setupDriveFolders', 'uploadDocument', 'getDocumentFile', 'createSnapshot'],
     folders: folders
   });
 }
@@ -18,6 +18,10 @@ function doPost(event) {
 
     if (payload.action === 'uploadDocument') {
       return jsonResponse(uploadDocument(payload));
+    }
+
+    if (payload.action === 'getDocumentFile') {
+      return jsonResponse(getDocumentFile(payload));
     }
 
     if (payload.action === 'setupDriveFolders') {
@@ -106,6 +110,56 @@ function uploadDocument(payload) {
   };
 }
 
+function getDocumentFile(payload) {
+  requireFields(payload, ['accessToken', 'donationType', 'donationId']);
+
+  if (payload.donationType !== 'donation_in' && payload.donationType !== 'donation_out') {
+    throw new Error('donationType must be donation_in or donation_out.');
+  }
+
+  var user = verifySupabaseUser(payload.accessToken);
+  var admin = isAdmin(user.id);
+  var donation = getDonationRecord(payload.donationType, payload.donationId);
+
+  if (payload.donationType === 'donation_in' && donation.user_id !== user.id && !admin) {
+    throw new Error('You do not have permission to view this document.');
+  }
+
+  var documents = supabaseRest(
+    'documents',
+    'get',
+    null,
+    '?select=*&id=eq.' + encodeURIComponent(donation.document_id) + '&limit=1',
+    {}
+  );
+
+  if (!documents.length) {
+    throw new Error('Document was not found.');
+  }
+
+  var document = documents[0];
+  var file = DriveApp.getFileById(document.drive_file_id);
+  var blob = file.getBlob();
+  var bytes = blob.getBytes();
+  var maxBytes = Number(getOptionalProperty('DOCUMENT_PREVIEW_MAX_BYTES') || 10485760);
+
+  if (bytes.length > maxBytes) {
+    throw new Error('Document is too large to preview. Use the Drive link to view it.');
+  }
+
+  return {
+    ok: true,
+    document: {
+      id: document.id,
+      drive_file_id: document.drive_file_id,
+      url: document.url,
+      file_name: document.file_name,
+      mime_type: document.mime_type,
+      base64: Utilities.base64Encode(bytes)
+    }
+  };
+}
+
 function createSnapshot(payload) {
   requireFields(payload, ['accessToken']);
 
@@ -163,11 +217,11 @@ function isAdmin(userId) {
     'profiles',
     'get',
     null,
-    '?select=role_id&id=eq.' + encodeURIComponent(userId) + '&limit=1',
+    '?select=role_id,is_active&id=eq.' + encodeURIComponent(userId) + '&limit=1',
     {}
   );
 
-  return rows.length > 0 && Number(rows[0].role_id) === 1;
+  return rows.length > 0 && Number(rows[0].role_id) === 1 && rows[0].is_active === true;
 }
 
 function getDonationRecord(donationType, donationId) {

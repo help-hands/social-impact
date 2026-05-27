@@ -1,11 +1,15 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   BadgeDollarSign,
+  Download,
+  Edit3,
+  ExternalLink,
   FileText,
   HandCoins,
   LogOut,
   Mail,
   Plus,
+  Printer,
   ShieldCheck,
   UserRound,
 } from 'lucide-react';
@@ -14,6 +18,7 @@ import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 type ViewKey = 'dashboard' | 'my-donations' | 'public-donations' | 'donations-out' | 'admin-out';
 type AuthMode = 'sign-in' | 'sign-up';
+type AdminCreateMode = 'donation_out' | 'donation_in' | 'users' | 'deleted';
 type OnboardingStep = 'required' | 'optional' | null;
 type ToastState = { type: 'success' | 'error'; message: string } | null;
 type UsernameStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
@@ -30,12 +35,13 @@ type Profile = {
   profile_image_url: string | null;
   reference_id: string;
   role_id: number;
+  is_active: boolean;
 };
 
 type PublicDonationIn = {
   id: string;
   donated_at: string;
-  amount: number;
+  amount_cents: number;
   reference_id: string;
   status: 'pending' | 'success' | 'failed';
   donor_username: string;
@@ -46,28 +52,32 @@ type DonationOut = {
   donee_name: string;
   address?: string | null;
   donated_at: string;
-  amount: number;
+  amount_cents: number;
   reference_id: string;
   status: 'pending' | 'success' | 'failed';
   created_at: string;
   updated_at: string;
   notes?: string | null;
   document_id?: string;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
 };
 
 type DonationIn = {
   id: string;
   user_id: string;
   donated_at: string;
-  amount: number;
+  amount_cents: number;
   reference_id: string;
   status: 'pending' | 'success' | 'failed';
   created_at: string;
   updated_at: string;
-  notes: string | null;
-  document_id: string;
+  notes?: string | null;
+  document_id?: string;
   donor_username?: string;
   donor_reference_id?: string;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
 };
 
 type DonationForm = {
@@ -83,15 +93,40 @@ type DonationOutForm = DonationForm & {
   address: string;
 };
 
+type DonorOption = {
+  id: string;
+  name: string;
+  username: string;
+  reference_id: string;
+};
+
+type AdminUser = DonorOption & {
+  mobile: string;
+  role_id: number;
+  is_active: boolean;
+};
+
 type SortKey = 'created_at' | 'updated_at' | 'donated_at';
 
 type FieldErrors = Record<string, string>;
+type ConfirmState = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => void | Promise<void>;
+} | null;
 
 type UploadedDocument = {
   id: string;
+  drive_file_id: string;
   url: string;
   file_name: string;
   mime_type: string;
+};
+
+type PreviewDocument = UploadedDocument & {
+  base64: string;
 };
 
 const navItems: Array<{ key: ViewKey; label: string; icon: typeof BadgeDollarSign }> = [
@@ -114,6 +149,8 @@ const emptyDonationOutForm: DonationOutForm = {
   donee_name: '',
   address: '',
 };
+
+const COMMUNITY_DONOR_ID = '00000000-0000-4000-8000-000000000001';
 
 const currency = new Intl.NumberFormat('en-LK', {
   style: 'currency',
@@ -150,12 +187,42 @@ function Toast({ toast }: { toast: ToastState }) {
   return <div className={`toast toast-${toast.type}`}>{toast.message}</div>;
 }
 
+function ConfirmModal({
+  action,
+  onCancel,
+  onConfirm,
+}: {
+  action: NonNullable<ConfirmState>;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return (
+    <div className="confirm-backdrop" onClick={onCancel}>
+      <section className="confirm-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <h2>{action.title}</h2>
+        <p>{action.message}</p>
+        <div className="confirm-actions">
+          <button className="secondary-action" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className={`secondary-action ${action.danger ? 'danger-action' : ''}`} type="button" onClick={onConfirm}>
+            {action.confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
   const [publicDonations, setPublicDonations] = useState<DonationIn[]>([]);
   const [myDonations, setMyDonations] = useState<DonationIn[]>([]);
   const [donationsOut, setDonationsOut] = useState<DonationOut[]>([]);
+  const [deletedDonationsIn, setDeletedDonationsIn] = useState<DonationIn[]>([]);
+  const [deletedDonationsOut, setDeletedDonationsOut] = useState<DonationOut[]>([]);
+  const [showMineDonationForm, setShowMineDonationForm] = useState(false);
   const [selectedDonationIn, setSelectedDonationIn] = useState<DonationIn | null>(null);
   const [selectedDonationOut, setSelectedDonationOut] = useState<DonationOut | null>(null);
   const [pendingDonationCount, setPendingDonationCount] = useState(0);
@@ -165,8 +232,10 @@ export function App() {
   const [savingDonation, setSavingDonation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmState>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in');
+  const [adminCreateMode, setAdminCreateMode] = useState<AdminCreateMode>('donation_out');
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep>(null);
   const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>('idle');
   const [email, setEmail] = useState('');
@@ -180,13 +249,20 @@ export function App() {
     mobile: '',
   });
   const [donationForm, setDonationForm] = useState<DonationForm>(emptyDonationForm);
+  const [adminDonationForm, setAdminDonationForm] = useState<DonationForm>(emptyDonationForm);
   const [donationOutForm, setDonationOutForm] = useState<DonationOutForm>(emptyDonationOutForm);
   const [donationDocument, setDonationDocument] = useState<UploadedDocument | null>(null);
+  const [adminDonationDocument, setAdminDonationDocument] = useState<UploadedDocument | null>(null);
   const [donationOutDocument, setDonationOutDocument] = useState<UploadedDocument | null>(null);
   const [donationUploadStatus, setDonationUploadStatus] = useState<UploadStatus>('idle');
+  const [adminDonationUploadStatus, setAdminDonationUploadStatus] = useState<UploadStatus>('idle');
   const [donationOutUploadStatus, setDonationOutUploadStatus] = useState<UploadStatus>('idle');
   const [donationErrors, setDonationErrors] = useState<FieldErrors>({});
+  const [adminDonationErrors, setAdminDonationErrors] = useState<FieldErrors>({});
   const [donationOutErrors, setDonationOutErrors] = useState<FieldErrors>({});
+  const [donorOptions, setDonorOptions] = useState<DonorOption[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminDonationUserId, setAdminDonationUserId] = useState(COMMUNITY_DONOR_ID);
   const [communitySearch, setCommunitySearch] = useState('');
   const [communitySort, setCommunitySort] = useState<SortKey>('created_at');
   const [outSearch, setOutSearch] = useState('');
@@ -213,14 +289,16 @@ export function App() {
   );
 
   const totals = useMemo(() => {
-    const incomingTotal = publicDonations.reduce((sum, donation) => sum + Number(donation.amount), 0);
-    const outgoingTotal = donationsOut.reduce((sum, donation) => sum + Number(donation.amount), 0);
+    const successfulIncoming = publicDonations.filter((donation) => donation.status === 'success');
+    const successfulOutgoing = donationsOut.filter((donation) => donation.status === 'success');
+    const incomingTotal = successfulIncoming.reduce((sum, donation) => sum + centsToCurrency(donation.amount_cents), 0);
+    const outgoingTotal = successfulOutgoing.reduce((sum, donation) => sum + centsToCurrency(donation.amount_cents), 0);
 
     return {
       incomingTotal,
       outgoingTotal,
-      incomingCount: publicDonations.length,
-      outgoingCount: donationsOut.length,
+      incomingCount: successfulIncoming.length,
+      outgoingCount: successfulOutgoing.length,
     };
   }, [donationsOut, publicDonations]);
 
@@ -260,12 +338,16 @@ export function App() {
 
       const { data, error: profileError } = await supabase!
         .from('profiles')
-        .select('id, name, first_name, last_name, username, nic, mobile, profile_image_url, reference_id, role_id')
+        .select('id, name, first_name, last_name, username, nic, mobile, profile_image_url, reference_id, role_id, is_active')
         .eq('id', session!.user.id)
         .maybeSingle();
 
       if (profileError) {
         setError(profileError.message);
+      } else if (data && !data.is_active) {
+        setProfile(null);
+        setError('Your account is deactivated. Please contact an admin to activate it again.');
+        await supabase!.auth.signOut();
       } else {
         setProfile(data as Profile | null);
       }
@@ -333,32 +415,57 @@ export function App() {
       setLoading(true);
       setError(null);
 
-      const [incomingResult, myIncomingResult, outgoingResult, pendingResult] = await Promise.all([
+      const [incomingResult, myIncomingResult, outgoingResult, pendingResult, usersResult, deletedInResult, deletedOutResult] = await Promise.all([
         supabase!
           .from('community_donations_in')
-          .select('id, user_id, donated_at, amount, reference_id, status, created_at, updated_at, donor_username, donor_reference_id')
+          .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, donor_username, donor_reference_id')
           .order('donated_at', { ascending: false })
           .limit(100),
         supabase!
           .from('donations_in')
-          .select('id, user_id, donated_at, amount, reference_id, status, created_at, updated_at, notes, document_id')
+          .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+          .is('deleted_at', null)
           .order('created_at', { ascending: false }),
         supabase!
           .from('community_donations_out')
-          .select('id, donee_name, donated_at, amount, reference_id, status, created_at, updated_at')
+          .select('id, donee_name, donated_at, amount_cents, reference_id, status, created_at, updated_at')
           .order('donated_at', { ascending: false })
           .limit(100),
         isAdmin
           ? supabase!.from('donations_in').select('id', { count: 'exact', head: true }).eq('status', 'pending')
+              .is('deleted_at', null)
           : Promise.resolve({ count: 0, error: null }),
+        isAdmin
+          ? supabase!
+              .from('profiles')
+              .select('id, name, username, reference_id, mobile, role_id, is_active')
+              .order('username', { ascending: true })
+          : Promise.resolve({ data: [], error: null }),
+        isAdmin
+          ? supabase!
+              .from('donations_in')
+              .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+              .not('deleted_at', 'is', null)
+              .order('deleted_at', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+        isAdmin
+          ? supabase!
+              .from('donations_out')
+              .select('id, donee_name, address, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+              .not('deleted_at', 'is', null)
+              .order('deleted_at', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
       ]);
 
-      if (incomingResult.error || myIncomingResult.error || outgoingResult.error || pendingResult.error) {
+      if (incomingResult.error || myIncomingResult.error || outgoingResult.error || pendingResult.error || usersResult.error || deletedInResult.error || deletedOutResult.error) {
         setError(
           incomingResult.error?.message ??
             myIncomingResult.error?.message ??
             outgoingResult.error?.message ??
             pendingResult.error?.message ??
+            usersResult.error?.message ??
+            deletedInResult.error?.message ??
+            deletedOutResult.error?.message ??
             'Unable to load records.',
         );
       } else {
@@ -366,6 +473,11 @@ export function App() {
         setMyDonations((myIncomingResult.data ?? []) as DonationIn[]);
         setDonationsOut((outgoingResult.data ?? []) as DonationOut[]);
         setPendingDonationCount(pendingResult.count ?? 0);
+        const users = (usersResult.data ?? []) as AdminUser[];
+        setAdminUsers(users);
+        setDonorOptions(users.filter((user) => user.is_active || user.id === COMMUNITY_DONOR_ID));
+        setDeletedDonationsIn((deletedInResult.data ?? []) as DonationIn[]);
+        setDeletedDonationsOut((deletedOutResult.data ?? []) as DonationOut[]);
       }
 
       setLoading(false);
@@ -461,6 +573,11 @@ export function App() {
     setPublicDonations([]);
     setMyDonations([]);
     setDonationsOut([]);
+    setDeletedDonationsIn([]);
+    setDeletedDonationsOut([]);
+    setDonorOptions([]);
+    setAdminUsers([]);
+    setAdminDonationUserId(COMMUNITY_DONOR_ID);
     setPendingDonationCount(0);
   }
 
@@ -532,6 +649,7 @@ export function App() {
       profile_image_url: profile?.profile_image_url ?? getDefaultProfileImageUrl(session),
       reference_id: profile?.reference_id ?? createReferenceId(session.user.id),
       role_id: profile?.role_id ?? 2,
+      is_active: profile?.is_active ?? true,
     };
 
     const query = profile
@@ -539,7 +657,7 @@ export function App() {
       : supabase.from('profiles').insert(nextProfile);
 
     const { data, error: saveError } = await query
-      .select('id, name, first_name, last_name, username, nic, mobile, profile_image_url, reference_id, role_id')
+      .select('id, name, first_name, last_name, username, nic, mobile, profile_image_url, reference_id, role_id, is_active')
       .single();
 
     if (saveError) {
@@ -573,7 +691,7 @@ export function App() {
         name: getDisplayName(firstName, lastName),
       })
       .eq('id', session.user.id)
-      .select('id, name, first_name, last_name, username, nic, mobile, profile_image_url, reference_id, role_id')
+      .select('id, name, first_name, last_name, username, nic, mobile, profile_image_url, reference_id, role_id, is_active')
       .single();
 
     if (updateError) {
@@ -601,6 +719,15 @@ export function App() {
     setDonationForm(nextForm);
   }
 
+  function updateAdminDonationForm(nextForm: DonationForm) {
+    if (nextForm.donated_at !== adminDonationForm.donated_at) {
+      setAdminDonationDocument(null);
+      setAdminDonationUploadStatus('idle');
+    }
+
+    setAdminDonationForm(nextForm);
+  }
+
   function updateDonationOutForm(nextForm: DonationOutForm) {
     if (nextForm.donated_at !== donationOutForm.donated_at) {
       setDonationOutDocument(null);
@@ -610,7 +737,7 @@ export function App() {
     setDonationOutForm(nextForm);
   }
 
-  async function handleDonationFileChange(file: File | null, type: 'in' | 'out') {
+  async function handleDonationFileChange(file: File | null, type: 'in' | 'admin-in' | 'out') {
     if (type === 'in') {
       const nextForm = { ...donationForm, file };
       setDonationForm(nextForm);
@@ -636,6 +763,32 @@ export function App() {
         setDonationUploadStatus('uploaded');
       } else {
         setDonationUploadStatus('error');
+      }
+    } else if (type === 'admin-in') {
+      const nextForm = { ...adminDonationForm, file };
+      setAdminDonationForm(nextForm);
+      setAdminDonationDocument(null);
+      setAdminDonationErrors((current) => ({ ...current, file: '' }));
+
+      if (!file) {
+        setAdminDonationUploadStatus('idle');
+        return;
+      }
+
+      if (!nextForm.donated_at) {
+        setAdminDonationUploadStatus('error');
+        setAdminDonationErrors((current) => ({ ...current, donated_at: 'Select donated date before uploading a document.' }));
+        showToast('error', 'Select donated date before uploading a document.');
+        return;
+      }
+
+      setAdminDonationUploadStatus('uploading');
+      const uploadedDocument = await uploadDonationDocument(nextForm, 'donation_in');
+      if (uploadedDocument) {
+        setAdminDonationDocument(uploadedDocument);
+        setAdminDonationUploadStatus('uploaded');
+      } else {
+        setAdminDonationUploadStatus('error');
       }
     } else {
       const nextForm = { ...donationOutForm, file };
@@ -687,13 +840,13 @@ export function App() {
       .from('donations_in')
       .insert({
         donated_at: new Date(donationForm.donated_at).toISOString(),
-        amount: Number(donationForm.amount),
+        amount_cents: currencyToCents(donationForm.amount),
         reference_id: donationForm.reference_id.trim(),
         notes: donationForm.notes.trim() || null,
         document_id: donationDocument.id,
         status: 'pending',
       })
-      .select('id, user_id, donated_at, amount, reference_id, status, created_at, updated_at, notes, document_id')
+      .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id')
       .single();
 
     if (insertError) {
@@ -713,7 +866,68 @@ export function App() {
       setDonationDocument(null);
       setDonationUploadStatus('idle');
       setDonationErrors({});
+      setShowMineDonationForm(false);
       showToast('success', 'Donation submitted for admin review.');
+    }
+
+    setSavingDonation(false);
+  }
+
+  async function handleAdminDonationInSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !isAdmin) return;
+
+    const validationErrors = validateDonationForm(adminDonationForm, adminDonationDocument, adminDonationUploadStatus);
+    if (!adminDonationUserId) validationErrors.user_id = 'Select a donor.';
+    setAdminDonationErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length) {
+      showToast('error', 'Please complete the required donation fields.');
+      return;
+    }
+
+    if (!adminDonationDocument) return;
+
+    setSavingDonation(true);
+    setError(null);
+
+    const donor = donorOptions.find((option) => option.id === adminDonationUserId);
+    const { data, error: insertError } = await supabase
+      .from('donations_in')
+      .insert({
+        user_id: adminDonationUserId,
+        donated_at: new Date(adminDonationForm.donated_at).toISOString(),
+        amount_cents: currencyToCents(adminDonationForm.amount),
+        reference_id: adminDonationForm.reference_id.trim(),
+        notes: adminDonationForm.notes.trim() || null,
+        document_id: adminDonationDocument.id,
+        status: 'pending',
+      })
+      .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id')
+      .single();
+
+    if (insertError) {
+      showToast('error', insertError.message);
+    } else {
+      const createdDonation = data as DonationIn;
+      setPublicDonations((current) => [
+        {
+          ...createdDonation,
+          donor_username: donor?.username,
+          donor_reference_id: donor?.reference_id,
+        },
+        ...current,
+      ]);
+      if (createdDonation.user_id === session?.user.id) {
+        setMyDonations((current) => [createdDonation, ...current]);
+      }
+      setAdminDonationForm(emptyDonationForm);
+      setAdminDonationDocument(null);
+      setAdminDonationUploadStatus('idle');
+      setAdminDonationErrors({});
+      setAdminDonationUserId(COMMUNITY_DONOR_ID);
+      setPendingDonationCount((current) => current + 1);
+      showToast('success', 'Admin donation-in record created.');
     }
 
     setSavingDonation(false);
@@ -741,13 +955,13 @@ export function App() {
         donee_name: donationOutForm.donee_name.trim(),
         address: donationOutForm.address.trim() || null,
         donated_at: new Date(donationOutForm.donated_at).toISOString(),
-        amount: Number(donationOutForm.amount),
+        amount_cents: currencyToCents(donationOutForm.amount),
         reference_id: donationOutForm.reference_id.trim(),
         notes: donationOutForm.notes.trim() || null,
         document_id: donationOutDocument.id,
         status: 'pending',
       })
-      .select('id, donee_name, address, donated_at, amount, reference_id, status, created_at, updated_at, notes, document_id')
+      .select('id, donee_name, address, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id')
       .single();
 
     if (insertError) {
@@ -816,7 +1030,7 @@ export function App() {
       .from('donations_in')
       .update({ status })
       .eq('id', donation.id)
-      .select('id, user_id, donated_at, amount, reference_id, status, created_at, updated_at, notes, document_id')
+      .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
       .single();
 
     if (updateError) {
@@ -844,6 +1058,81 @@ export function App() {
     showToast('success', 'Donation status updated.');
   }
 
+  async function handleDonationInDonorChange(donation: DonationIn, userId: string) {
+    if (!supabase || !isAdmin) return;
+
+    const donor = donorOptions.find((option) => option.id === userId);
+    const { data, error: updateError } = await supabase
+      .from('donations_in')
+      .update({ user_id: userId })
+      .eq('id', donation.id)
+      .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+      .single();
+
+    if (updateError) {
+      showToast('error', updateError.message);
+      return;
+    }
+
+    const updated = {
+      ...(data as DonationIn),
+      donor_username: donor?.username,
+      donor_reference_id: donor?.reference_id,
+    };
+
+    setPublicDonations((current) => current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+    setMyDonations((current) => {
+      const isMine = updated.user_id === session?.user.id;
+      const exists = current.some((item) => item.id === updated.id);
+
+      if (!isMine) {
+        return current.filter((item) => item.id !== updated.id);
+      }
+
+      if (exists) {
+        return current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item));
+      }
+
+      return [updated, ...current];
+    });
+    setSelectedDonationIn((current) => (current?.id === updated.id ? { ...current, ...updated } : current));
+    showToast('success', 'Donation donor updated.');
+  }
+
+  async function handleDonationInOwnerUpdate(donation: DonationIn, updates: Partial<DonationIn>) {
+    if (!supabase || !session) return;
+
+    if (donation.user_id !== session.user.id || donation.status === 'success') {
+      showToast('error', 'This donation cannot be edited.');
+      return;
+    }
+
+    const { data, error: updateError } = await supabase
+      .from('donations_in')
+      .update(updates)
+      .eq('id', donation.id)
+      .eq('user_id', session.user.id)
+      .neq('status', 'success')
+      .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+      .single();
+
+    if (updateError) {
+      showToast('error', updateError.message);
+      return;
+    }
+
+    const updated = {
+      ...(data as DonationIn),
+      donor_username: donation.donor_username ?? profile?.username,
+      donor_reference_id: donation.donor_reference_id ?? profile?.reference_id,
+    };
+
+    setPublicDonations((current) => current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+    setMyDonations((current) => current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+    setSelectedDonationIn((current) => (current?.id === updated.id ? { ...current, ...updated } : current));
+    showToast('success', 'Donation record updated.');
+  }
+
   async function handleDonationOutUpdate(donationId: string, updates: Partial<DonationOut>) {
     if (!supabase || !isAdmin) return;
 
@@ -851,7 +1140,7 @@ export function App() {
       .from('donations_out')
       .update(updates)
       .eq('id', donationId)
-      .select('id, donee_name, address, donated_at, amount, reference_id, status, created_at, updated_at, notes, document_id')
+      .select('id, donee_name, address, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
       .single();
 
     if (updateError) {
@@ -863,6 +1152,164 @@ export function App() {
     setDonationsOut((current) => current.map((item) => (item.id === updated.id ? updated : item)));
     setSelectedDonationOut(updated);
     showToast('success', 'Donation out record updated.');
+  }
+
+  async function handleDonationInDeletedChange(donation: DonationIn, deleted: boolean) {
+    if (!supabase || !isAdmin || !session) return;
+
+    if (deleted) {
+      setConfirmAction({
+        title: 'Delete donation record?',
+        message: `This will hide ${donation.reference_id} from normal lists and totals. Admins can restore it later.`,
+        confirmLabel: 'Delete record',
+        danger: true,
+        onConfirm: () => applyDonationInDeletedChange(donation, true),
+      });
+      return;
+    }
+
+    await applyDonationInDeletedChange(donation, false);
+  }
+
+  async function applyDonationInDeletedChange(donation: DonationIn, deleted: boolean) {
+    if (!supabase || !isAdmin || !session) return;
+
+    const updates = deleted
+      ? { deleted_at: new Date().toISOString(), deleted_by: session.user.id }
+      : { deleted_at: null, deleted_by: null };
+    const { data, error: updateError } = await supabase
+      .from('donations_in')
+      .update(updates)
+      .eq('id', donation.id)
+      .select('id, user_id, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+      .single();
+
+    if (updateError) {
+      showToast('error', updateError.message);
+      return;
+    }
+
+    const donor = adminUsers.find((user) => user.id === data.user_id);
+    const updated = {
+      ...(data as DonationIn),
+      donor_username: donor?.username ?? donation.donor_username,
+      donor_reference_id: donor?.reference_id ?? donation.donor_reference_id,
+    };
+
+    if (deleted) {
+      setPublicDonations((current) => current.filter((item) => item.id !== updated.id));
+      setMyDonations((current) => current.filter((item) => item.id !== updated.id));
+      setDeletedDonationsIn((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      setPendingDonationCount((current) => Math.max(0, current - (donation.status === 'pending' ? 1 : 0)));
+    } else {
+      setDeletedDonationsIn((current) => current.filter((item) => item.id !== updated.id));
+      setPublicDonations((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      if (updated.user_id === session.user.id) {
+        setMyDonations((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      }
+      setPendingDonationCount((current) => current + (updated.status === 'pending' ? 1 : 0));
+    }
+
+    setSelectedDonationIn((current) => (current?.id === updated.id ? { ...current, ...updated } : current));
+    showToast('success', deleted ? 'Donation record deleted.' : 'Donation record restored.');
+  }
+
+  async function handleDonationOutDeletedChange(donation: DonationOut, deleted: boolean) {
+    if (!supabase || !isAdmin || !session) return;
+
+    if (deleted) {
+      setConfirmAction({
+        title: 'Delete donation out record?',
+        message: `This will hide ${donation.reference_id} from normal lists and totals. Admins can restore it later.`,
+        confirmLabel: 'Delete record',
+        danger: true,
+        onConfirm: () => applyDonationOutDeletedChange(donation, true),
+      });
+      return;
+    }
+
+    await applyDonationOutDeletedChange(donation, false);
+  }
+
+  async function applyDonationOutDeletedChange(donation: DonationOut, deleted: boolean) {
+    if (!supabase || !isAdmin || !session) return;
+
+    const updates = deleted
+      ? { deleted_at: new Date().toISOString(), deleted_by: session.user.id }
+      : { deleted_at: null, deleted_by: null };
+    const { data, error: updateError } = await supabase
+      .from('donations_out')
+      .update(updates)
+      .eq('id', donation.id)
+      .select('id, donee_name, address, donated_at, amount_cents, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by')
+      .single();
+
+    if (updateError) {
+      showToast('error', updateError.message);
+      return;
+    }
+
+    const updated = data as DonationOut;
+    if (deleted) {
+      setDonationsOut((current) => current.filter((item) => item.id !== updated.id));
+      setDeletedDonationsOut((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+    } else {
+      setDeletedDonationsOut((current) => current.filter((item) => item.id !== updated.id));
+      setDonationsOut((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+    }
+    setSelectedDonationOut((current) => (current?.id === updated.id ? updated : current));
+    showToast('success', deleted ? 'Donation out record deleted.' : 'Donation out record restored.');
+  }
+
+  async function handleUserActiveChange(user: AdminUser, isActive: boolean) {
+    if (!supabase || !isAdmin) return;
+
+    if (user.id === session?.user.id && !isActive) {
+      showToast('error', 'You cannot deactivate your own admin account.');
+      return;
+    }
+
+    if (user.id === COMMUNITY_DONOR_ID && !isActive) {
+      showToast('error', 'Community donor must stay active.');
+      return;
+    }
+
+    if (!isActive) {
+      setConfirmAction({
+        title: 'Deactivate user?',
+        message: `${user.name || user.username} will be blocked from using the app until an admin activates the account again.`,
+        confirmLabel: 'Deactivate user',
+        danger: true,
+        onConfirm: () => applyUserActiveChange(user, false),
+      });
+      return;
+    }
+
+    await applyUserActiveChange(user, true);
+  }
+
+  async function applyUserActiveChange(user: AdminUser, isActive: boolean) {
+    if (!supabase || !isAdmin) return;
+
+    const { data, error: updateError } = await supabase
+      .from('profiles')
+      .update({ is_active: isActive })
+      .eq('id', user.id)
+      .select('id, name, username, reference_id, mobile, role_id, is_active')
+      .single();
+
+    if (updateError) {
+      showToast('error', updateError.message);
+      return;
+    }
+
+    const updated = data as AdminUser;
+    setAdminUsers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    setDonorOptions((current) => {
+      const withoutUpdated = current.filter((item) => item.id !== updated.id);
+      return updated.is_active || updated.id === COMMUNITY_DONOR_ID ? [...withoutUpdated, updated].sort((a, b) => a.username.localeCompare(b.username)) : withoutUpdated;
+    });
+    showToast('success', isActive ? 'User activated.' : 'User deactivated.');
   }
 
   if (!isSupabaseConfigured) {
@@ -1076,30 +1523,31 @@ export function App() {
     <div className="app-layout">
       <Toast toast={toast} />
       <header className="topbar">
-        <div>
+        <div className="brand-block">
           <p className="eyebrow">Donation Records</p>
           <h1>Social Impact</h1>
         </div>
-        {isAdmin && pendingDonationCount > 0 && (
-          <button className="pending-banner" type="button" onClick={() => setActiveView('public-donations')}>
-            {pendingDonationCount} pending
+        <div className="topbar-actions">
+          <section className="header-user" aria-label="Signed in user">
+            <div>
+              <p className="eyebrow">Signed in</p>
+              <strong>{completedProfile.name}</strong>
+              <span>{userEmail}</span>
+            </div>
+            <Avatar profile={completedProfile} />
+          </section>
+          {isAdmin && pendingDonationCount > 0 && (
+            <button className="pending-banner" type="button" onClick={() => setActiveView('public-donations')}>
+              {pendingDonationCount} pending
+            </button>
+          )}
+          <button className="icon-button" type="button" onClick={handleSignOut} aria-label="Sign out">
+            <LogOut aria-hidden="true" />
           </button>
-        )}
-        <button className="icon-button" type="button" onClick={handleSignOut} aria-label="Sign out">
-          <LogOut aria-hidden="true" />
-        </button>
+        </div>
       </header>
 
       <main className="content">
-        <section className="welcome-strip">
-          <div>
-            <p className="eyebrow">Signed in</p>
-            <strong>{completedProfile.name}</strong>
-            <span className="muted">{userEmail}</span>
-          </div>
-          <Avatar profile={completedProfile} />
-        </section>
-
         {error && <p className="error-banner">{error}</p>}
 
         {activeView === 'dashboard' && (
@@ -1119,19 +1567,34 @@ export function App() {
 
         {activeView === 'my-donations' && (
           <section className="record-section">
-            <h2>New Donation In</h2>
-            <DonationInForm
-              form={donationForm}
-              errors={donationErrors}
-              saving={savingDonation}
-              uploadedDocument={donationDocument}
-              uploadStatus={donationUploadStatus}
-              onChange={updateDonationForm}
-              onFileChange={(file) => handleDonationFileChange(file, 'in')}
-              onSubmit={handleDonationInSubmit}
-            />
+            <div className="section-header">
+              <h2>My Donation Records</h2>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => setShowMineDonationForm((current) => !current)}
+              >
+                <Plus aria-hidden="true" />
+                {showMineDonationForm ? 'Hide form' : 'Create new donation'}
+              </button>
+            </div>
 
-            <h2 className="section-subtitle">My Donation Records</h2>
+            {showMineDonationForm && (
+              <div className="expandable-form">
+                <h3>New Donation In</h3>
+                <DonationInForm
+                  form={donationForm}
+                  errors={donationErrors}
+                  saving={savingDonation}
+                  uploadedDocument={donationDocument}
+                  uploadStatus={donationUploadStatus}
+                  onChange={updateDonationForm}
+                  onFileChange={(file) => handleDonationFileChange(file, 'in')}
+                  onSubmit={handleDonationInSubmit}
+                />
+              </div>
+            )}
+
             {myDonations.length ? (
               <div className="record-list">
                 {myDonations.map((donation) => (
@@ -1141,7 +1604,7 @@ export function App() {
                       <span>{formatDate(donation.donated_at)}</span>
                     </div>
                     <div>
-                      <strong>{currency.format(Number(donation.amount))}</strong>
+                      <strong>{currency.format(centsToCurrency(donation.amount_cents))}</strong>
                       <StatusPill status={donation.status} />
                     </div>
                   </button>
@@ -1171,10 +1634,16 @@ export function App() {
                   <button className="record-item record-button" key={donation.id} onClick={() => setSelectedDonationIn(donation)}>
                     <div>
                       <strong>{donation.reference_id}</strong>
-                      <span>{donation.donor_username ? `@${donation.donor_username}` : 'Community donation'}</span>
+                      <span>
+                        {isAdmin || donation.user_id === session.user.id
+                          ? donation.donor_username
+                            ? `@${donation.donor_username}`
+                            : donation.donor_reference_id || 'Community donation'
+                          : donation.donor_reference_id || 'Community donation'}
+                      </span>
                     </div>
                     <div>
-                      <strong>{currency.format(Number(donation.amount))}</strong>
+                      <strong>{currency.format(centsToCurrency(donation.amount_cents))}</strong>
                       <StatusPill status={donation.status} />
                     </div>
                   </button>
@@ -1207,7 +1676,7 @@ export function App() {
                       <span>{formatDate(donation.donated_at)}</span>
                     </div>
                     <div>
-                      <strong>{currency.format(Number(donation.amount))}</strong>
+                      <strong>{currency.format(centsToCurrency(donation.amount_cents))}</strong>
                       <StatusPill status={donation.status} />
                     </div>
                   </button>
@@ -1221,17 +1690,85 @@ export function App() {
 
         {activeView === 'admin-out' && isAdmin && (
           <section className="record-section">
-            <h2>Create Donation Out</h2>
-            <DonationOutFormView
-              form={donationOutForm}
-              errors={donationOutErrors}
-              saving={savingDonation}
-              uploadedDocument={donationOutDocument}
-              uploadStatus={donationOutUploadStatus}
-              onChange={updateDonationOutForm}
-              onFileChange={(file) => handleDonationFileChange(file, 'out')}
-              onSubmit={handleDonationOutSubmit}
-            />
+            <h2>Admin</h2>
+            <div className="admin-create-tabs" aria-label="Admin section">
+              <button
+                className={adminCreateMode === 'donation_out' ? 'active' : ''}
+                type="button"
+                onClick={() => setAdminCreateMode('donation_out')}
+              >
+                Donation Out
+              </button>
+              <button
+                className={adminCreateMode === 'donation_in' ? 'active' : ''}
+                type="button"
+                onClick={() => setAdminCreateMode('donation_in')}
+              >
+                Donation In
+              </button>
+              <button
+                className={adminCreateMode === 'users' ? 'active' : ''}
+                type="button"
+                onClick={() => setAdminCreateMode('users')}
+              >
+                Users
+              </button>
+              <button
+                className={adminCreateMode === 'deleted' ? 'active' : ''}
+                type="button"
+                onClick={() => setAdminCreateMode('deleted')}
+              >
+                Deleted
+              </button>
+            </div>
+
+            {adminCreateMode === 'donation_out' && (
+              <div className="admin-tab-panel">
+                <h3>Create Donation Out</h3>
+                <DonationOutFormView
+                  form={donationOutForm}
+                  errors={donationOutErrors}
+                  saving={savingDonation}
+                  uploadedDocument={donationOutDocument}
+                  uploadStatus={donationOutUploadStatus}
+                  onChange={updateDonationOutForm}
+                  onFileChange={(file) => handleDonationFileChange(file, 'out')}
+                  onSubmit={handleDonationOutSubmit}
+                />
+              </div>
+            )}
+
+            {adminCreateMode === 'donation_in' && (
+              <div className="admin-tab-panel">
+                <h3>Create Donation In</h3>
+                <AdminDonationInForm
+                  form={adminDonationForm}
+                  errors={adminDonationErrors}
+                  saving={savingDonation}
+                  donorOptions={donorOptions}
+                  selectedDonorId={adminDonationUserId}
+                  uploadedDocument={adminDonationDocument}
+                  uploadStatus={adminDonationUploadStatus}
+                  onDonorChange={setAdminDonationUserId}
+                  onChange={updateAdminDonationForm}
+                  onFileChange={(file) => handleDonationFileChange(file, 'admin-in')}
+                  onSubmit={handleAdminDonationInSubmit}
+                />
+              </div>
+            )}
+
+            {adminCreateMode === 'users' && (
+              <AdminUsersSection users={adminUsers} currentUserId={session.user.id} onActiveChange={handleUserActiveChange} />
+            )}
+
+            {adminCreateMode === 'deleted' && (
+              <DeletedRecordsSection
+                donationsIn={deletedDonationsIn}
+                donationsOut={deletedDonationsOut}
+                onOpenDonationIn={setSelectedDonationIn}
+                onOpenDonationOut={setSelectedDonationOut}
+              />
+            )}
           </section>
         )}
       </main>
@@ -1241,8 +1778,13 @@ export function App() {
           donation={selectedDonationIn}
           isAdmin={isAdmin}
           isOwner={selectedDonationIn.user_id === session.user.id}
+          donorOptions={donorOptions}
           onClose={() => setSelectedDonationIn(null)}
           onStatusChange={handleDonationInStatusChange}
+          onDonorChange={handleDonationInDonorChange}
+          onOwnerUpdate={handleDonationInOwnerUpdate}
+          onDocumentUpload={(form) => uploadDonationDocument(form, 'donation_in')}
+          onDeletedChange={handleDonationInDeletedChange}
         />
       )}
 
@@ -1252,6 +1794,19 @@ export function App() {
           isAdmin={isAdmin}
           onClose={() => setSelectedDonationOut(null)}
           onSave={handleDonationOutUpdate}
+          onDeletedChange={handleDonationOutDeletedChange}
+        />
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          action={confirmAction}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={async () => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            await action.onConfirm();
+          }}
         />
       )}
 
@@ -1360,6 +1915,161 @@ function RequiredLabel({ children }: { children: string }) {
   );
 }
 
+function AdminUsersSection({
+  users,
+  currentUserId,
+  onActiveChange,
+}: {
+  users: AdminUser[];
+  currentUserId: string;
+  onActiveChange: (user: AdminUser, isActive: boolean) => void;
+}) {
+  return (
+    <div className="admin-tab-panel">
+      <h2>Users</h2>
+      {users.length ? (
+        <div className="record-list">
+          {users.map((user) => (
+            <article className="record-item" key={user.id}>
+              <div>
+                <strong>{user.name || user.username}</strong>
+                <span>@{user.username} · {user.reference_id}</span>
+                <span>{user.mobile}</span>
+              </div>
+              <div>
+                <span className={`status ${user.is_active ? 'status-success' : 'status-failed'}`}>
+                  {user.is_active ? 'active' : 'inactive'}
+                </span>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={user.id === currentUserId || user.id === COMMUNITY_DONOR_ID}
+                  onClick={() => onActiveChange(user, !user.is_active)}
+                >
+                  {user.is_active ? 'Deactivate' : 'Activate'}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="No users found." />
+      )}
+    </div>
+  );
+}
+
+function DeletedRecordsSection({
+  donationsIn,
+  donationsOut,
+  onOpenDonationIn,
+  onOpenDonationOut,
+}: {
+  donationsIn: DonationIn[];
+  donationsOut: DonationOut[];
+  onOpenDonationIn: (donation: DonationIn) => void;
+  onOpenDonationOut: (donation: DonationOut) => void;
+}) {
+  return (
+    <div className="admin-tab-panel">
+      <h2>Deleted Records</h2>
+      <h3 className="section-subtitle">Donation In</h3>
+      {donationsIn.length ? (
+        <div className="record-list">
+          {donationsIn.map((donation) => (
+            <button className="record-item record-button" key={donation.id} onClick={() => onOpenDonationIn(donation)}>
+              <div>
+                <strong>{donation.reference_id}</strong>
+                <span>{donation.donor_username ? `@${donation.donor_username}` : donation.user_id}</span>
+              </div>
+              <div>
+                <strong>{currency.format(centsToCurrency(donation.amount_cents))}</strong>
+                {donation.deleted_at && <span>Deleted {formatDate(donation.deleted_at)}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="No deleted incoming records." />
+      )}
+
+      <h3 className="section-subtitle">Donation Out</h3>
+      {donationsOut.length ? (
+        <div className="record-list">
+          {donationsOut.map((donation) => (
+            <button className="record-item record-button" key={donation.id} onClick={() => onOpenDonationOut(donation)}>
+              <div>
+                <strong>{donation.donee_name}</strong>
+                <span>{donation.reference_id}</span>
+              </div>
+              <div>
+                <strong>{currency.format(centsToCurrency(donation.amount_cents))}</strong>
+                {donation.deleted_at && <span>Deleted {formatDate(donation.deleted_at)}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="No deleted outgoing records." />
+      )}
+    </div>
+  );
+}
+
+function AdminDonationInForm({
+  form,
+  errors,
+  saving,
+  donorOptions,
+  selectedDonorId,
+  uploadedDocument,
+  uploadStatus,
+  onDonorChange,
+  onChange,
+  onFileChange,
+  onSubmit,
+}: {
+  form: DonationForm;
+  errors: FieldErrors;
+  saving: boolean;
+  donorOptions: DonorOption[];
+  selectedDonorId: string;
+  uploadedDocument: UploadedDocument | null;
+  uploadStatus: UploadStatus;
+  onDonorChange: (userId: string) => void;
+  onChange: (form: DonationForm) => void;
+  onFileChange: (file: File | null) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form className="donation-form" onSubmit={onSubmit}>
+      <FieldGroup error={errors.user_id}>
+        <RequiredLabel>Donor</RequiredLabel>
+        <select value={selectedDonorId} onChange={(event) => onDonorChange(event.target.value)}>
+          {donorOptions.map((donor) => (
+            <option key={donor.id} value={donor.id}>
+              {donor.username === 'community_donor'
+                ? 'Community Donor'
+                : `${donor.name || donor.username} (@${donor.username})`}
+            </option>
+          ))}
+        </select>
+      </FieldGroup>
+      <DonationFields
+        form={form}
+        errors={errors}
+        uploadedDocument={uploadedDocument}
+        uploadStatus={uploadStatus}
+        onChange={onChange}
+        onFileChange={onFileChange}
+      />
+      <button type="submit" disabled={saving || uploadStatus === 'uploading' || !uploadedDocument}>
+        {saving ? 'Saving...' : 'Save Donation In'}
+      </button>
+    </form>
+  );
+}
+
 function DonationInForm({
   form,
   errors,
@@ -1381,6 +2091,42 @@ function DonationInForm({
 }) {
   return (
     <form className="donation-form" onSubmit={onSubmit}>
+      <DonationFields
+        form={form}
+        errors={errors}
+        uploadedDocument={uploadedDocument}
+        uploadStatus={uploadStatus}
+        onChange={onChange}
+        onFileChange={onFileChange}
+      />
+      <button type="submit" disabled={saving || uploadStatus === 'uploading' || !uploadedDocument}>
+        {saving ? 'Saving...' : 'Save Donation'}
+      </button>
+    </form>
+  );
+}
+
+function DonationFields({
+  form,
+  errors,
+  uploadedDocument,
+  uploadStatus,
+  onChange,
+  onFileChange,
+  documentLabel = 'Document',
+  documentRequired = true,
+}: {
+  form: DonationForm;
+  errors: FieldErrors;
+  uploadedDocument: UploadedDocument | null;
+  uploadStatus: UploadStatus;
+  onChange: (form: DonationForm) => void;
+  onFileChange: (file: File | null) => void;
+  documentLabel?: string;
+  documentRequired?: boolean;
+}) {
+  return (
+    <>
       <FieldGroup error={errors.donated_at}>
         <RequiredLabel>Donated at</RequiredLabel>
         <input
@@ -1419,11 +2165,10 @@ function DonationInForm({
         uploadedDocument={uploadedDocument}
         uploadStatus={uploadStatus}
         onFileChange={onFileChange}
+        label={documentLabel}
+        required={documentRequired}
       />
-      <button type="submit" disabled={saving || uploadStatus === 'uploading' || !uploadedDocument}>
-        {saving ? 'Saving...' : 'Save Donation'}
-      </button>
-    </form>
+    </>
   );
 }
 
@@ -1498,6 +2243,7 @@ function DonationOutFormView({
         uploadedDocument={uploadedDocument}
         uploadStatus={uploadStatus}
         onFileChange={onFileChange}
+        required
       />
       <button type="submit" disabled={saving || uploadStatus === 'uploading' || !uploadedDocument}>
         {saving ? 'Saving...' : 'Create Donation Out'}
@@ -1521,18 +2267,22 @@ function DocumentInput({
   uploadedDocument,
   uploadStatus,
   onFileChange,
+  label = 'Document',
+  required = false,
 }: {
   file: File | null;
   error?: string;
   uploadedDocument: UploadedDocument | null;
   uploadStatus: UploadStatus;
   onFileChange: (file: File | null) => void;
+  label?: string;
+  required?: boolean;
 }) {
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
 
   return (
     <FieldGroup error={error}>
-      <RequiredLabel>Document</RequiredLabel>
+      {required ? <RequiredLabel>{label}</RequiredLabel> : <label className="field-label">{label}</label>}
       <input
         className={error ? 'field-error' : ''}
         type="file"
@@ -1595,37 +2345,191 @@ function DonationInModal({
   donation,
   isAdmin,
   isOwner,
+  donorOptions,
   onClose,
   onStatusChange,
+  onDonorChange,
+  onOwnerUpdate,
+  onDocumentUpload,
+  onDeletedChange,
 }: {
   donation: DonationIn;
   isAdmin: boolean;
   isOwner: boolean;
+  donorOptions: DonorOption[];
   onClose: () => void;
   onStatusChange: (donation: DonationIn, status: DonationIn['status']) => void;
+  onDonorChange: (donation: DonationIn, userId: string) => void;
+  onOwnerUpdate: (donation: DonationIn, updates: Partial<DonationIn>) => Promise<void>;
+  onDocumentUpload: (form: DonationForm) => Promise<UploadedDocument | null>;
+  onDeletedChange: (donation: DonationIn, deleted: boolean) => void;
 }) {
+  const isDeleted = Boolean(donation.deleted_at);
+  const canOwnerEdit = isOwner && donation.status !== 'success' && !isDeleted;
+  const [editForm, setEditForm] = useState<DonationForm>({
+    donated_at: donation.donated_at.slice(0, 10),
+    amount: centsToCurrency(donation.amount_cents).toFixed(2),
+    reference_id: donation.reference_id,
+    notes: donation.notes ?? '',
+    file: null,
+  });
+  const [editErrors, setEditErrors] = useState<FieldErrors>({});
+  const [editDocument, setEditDocument] = useState<UploadedDocument | null>(null);
+  const [editUploadStatus, setEditUploadStatus] = useState<UploadStatus>('idle');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editingOwnerRecord, setEditingOwnerRecord] = useState(false);
+
+  useEffect(() => {
+    setEditForm({
+      donated_at: donation.donated_at.slice(0, 10),
+      amount: centsToCurrency(donation.amount_cents).toFixed(2),
+      reference_id: donation.reference_id,
+      notes: donation.notes ?? '',
+      file: null,
+    });
+    setEditErrors({});
+    setEditDocument(null);
+    setEditUploadStatus('idle');
+    setEditingOwnerRecord(false);
+  }, [donation]);
+
+  function updateEditForm(nextForm: DonationForm) {
+    if (nextForm.donated_at !== editForm.donated_at) {
+      setEditDocument(null);
+      setEditUploadStatus(nextForm.file ? 'error' : 'idle');
+    }
+
+    setEditForm(nextForm);
+  }
+
+  async function handleEditFileChange(file: File | null) {
+    const nextForm = { ...editForm, file };
+    setEditForm(nextForm);
+    setEditDocument(null);
+    setEditErrors((current) => ({ ...current, file: '' }));
+
+    if (!file) {
+      setEditUploadStatus('idle');
+      return;
+    }
+
+    if (!nextForm.donated_at) {
+      setEditUploadStatus('error');
+      setEditErrors((current) => ({ ...current, donated_at: 'Select donated date before uploading a document.' }));
+      return;
+    }
+
+    setEditUploadStatus('uploading');
+    const uploadedDocument = await onDocumentUpload(nextForm);
+    if (uploadedDocument) {
+      setEditDocument(uploadedDocument);
+      setEditUploadStatus('uploaded');
+    } else {
+      setEditUploadStatus('error');
+    }
+  }
+
+  async function handleOwnerEditSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const validationErrors = validateDonationEditForm(editForm, editDocument, editUploadStatus);
+    setEditErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length) return;
+
+    setSavingEdit(true);
+    await onOwnerUpdate(donation, {
+      donated_at: new Date(editForm.donated_at).toISOString(),
+      amount_cents: currencyToCents(editForm.amount),
+      reference_id: editForm.reference_id.trim(),
+      notes: editForm.notes.trim() || null,
+      ...(editDocument ? { document_id: editDocument.id } : {}),
+    });
+    setEditForm((current) => ({ ...current, file: null }));
+    setEditDocument(null);
+    setEditUploadStatus('idle');
+    setEditingOwnerRecord(false);
+    setSavingEdit(false);
+  }
+
   return (
-    <div className="modal-backdrop">
-      <section className="modal">
-        <button className="modal-close" type="button" onClick={onClose}>
-          Close
-        </button>
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <h2>{donation.reference_id}</h2>
-        <DetailRow label="Amount" value={currency.format(Number(donation.amount))} />
+        <DetailRow label="Amount" value={currency.format(centsToCurrency(donation.amount_cents))} />
         <DetailRow label="Donated at" value={formatDate(donation.donated_at)} />
         <DetailRow label="Status" value={donation.status} />
+        {donation.deleted_at && <DetailRow label="Deleted" value={formatDate(donation.deleted_at)} />}
         <DetailRow label="Created" value={formatDate(donation.created_at)} />
         {(isAdmin || isOwner) && <DetailRow label="User ID" value={donation.user_id} />}
-        {donation.donor_username && <DetailRow label="Username" value={`@${donation.donor_username}`} />}
+        {(isAdmin || isOwner) && donation.donor_username && <DetailRow label="Username" value={`@${donation.donor_username}`} />}
+        {!isAdmin && !isOwner && donation.donor_reference_id && (
+          <DetailRow label="User Reference" value={donation.donor_reference_id} />
+        )}
+        <DocumentViewer
+          recordType="donation_in"
+          recordId={donation.id}
+          documentId={donation.document_id}
+          canView={isAdmin || isOwner}
+        />
+        {canOwnerEdit && !editingOwnerRecord && (
+          <button className="secondary-action modal-action" type="button" onClick={() => setEditingOwnerRecord(true)}>
+            <Edit3 aria-hidden="true" />
+            Edit my record
+          </button>
+        )}
         {isAdmin && (
-          <div className="field-group">
-            <label className="field-label">Admin status</label>
-            <select value={donation.status} onChange={(event) => onStatusChange(donation, event.target.value as DonationIn['status'])}>
-              <option value="pending">Pending</option>
-              <option value="success">Success</option>
-              <option value="failed">Failed</option>
-            </select>
-          </div>
+          <>
+            <div className="field-group">
+              <label className="field-label">Admin donor</label>
+              <select value={donation.user_id} onChange={(event) => onDonorChange(donation, event.target.value)}>
+                {donorOptions.map((donor) => (
+                  <option key={donor.id} value={donor.id}>
+                    {donor.username === 'community_donor'
+                      ? 'Community Donor'
+                      : `${donor.name || donor.username} (@${donor.username})`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field-group">
+              <label className="field-label">Admin status</label>
+              <select value={donation.status} onChange={(event) => onStatusChange(donation, event.target.value as DonationIn['status'])}>
+                <option value="pending">Pending</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
+            <button className="secondary-action danger-action" type="button" onClick={() => onDeletedChange(donation, !isDeleted)}>
+              {isDeleted ? 'Restore record' : 'Delete record'}
+            </button>
+          </>
+        )}
+        {canOwnerEdit && editingOwnerRecord && (
+          <form className="donation-form modal-edit" onSubmit={handleOwnerEditSubmit}>
+            <div className="section-header">
+              <h3>Edit My Record</h3>
+              <button className="secondary-action" type="button" onClick={() => setEditingOwnerRecord(false)}>
+                Cancel
+              </button>
+            </div>
+            <DonationFields
+              form={editForm}
+              errors={editErrors}
+              uploadedDocument={editDocument}
+              uploadStatus={editUploadStatus}
+              onChange={updateEditForm}
+              onFileChange={handleEditFileChange}
+              documentLabel="Replace document"
+              documentRequired={false}
+            />
+            <button type="submit" disabled={savingEdit || editUploadStatus === 'uploading'}>
+              {savingEdit ? 'Saving...' : 'Save changes'}
+            </button>
+          </form>
+        )}
+        {isOwner && donation.status === 'success' && (
+          <p className="muted">This donation is approved, so it can no longer be edited.</p>
         )}
       </section>
     </div>
@@ -1637,17 +2541,20 @@ function DonationOutModal({
   isAdmin,
   onClose,
   onSave,
+  onDeletedChange,
 }: {
   donation: DonationOut;
   isAdmin: boolean;
   onClose: () => void;
   onSave: (donationId: string, updates: Partial<DonationOut>) => void;
+  onDeletedChange: (donation: DonationOut, deleted: boolean) => void;
 }) {
+  const isDeleted = Boolean(donation.deleted_at);
   const [editForm, setEditForm] = useState({
     donee_name: donation.donee_name,
     address: donation.address ?? '',
     donated_at: donation.donated_at.slice(0, 10),
-    amount: String(donation.amount),
+    amount: centsToCurrency(donation.amount_cents).toFixed(2),
     reference_id: donation.reference_id,
     status: donation.status,
     notes: donation.notes ?? '',
@@ -1660,7 +2567,7 @@ function DonationOutModal({
       donee_name: editForm.donee_name.trim(),
       address: editForm.address.trim() || null,
       donated_at: new Date(editForm.donated_at).toISOString(),
-      amount: Number(editForm.amount),
+      amount_cents: currencyToCents(editForm.amount),
       reference_id: editForm.reference_id.trim(),
       status: editForm.status,
       notes: editForm.notes.trim() || null,
@@ -1668,18 +2575,22 @@ function DonationOutModal({
   }
 
   return (
-    <div className="modal-backdrop">
-      <section className="modal">
-        <button className="modal-close" type="button" onClick={onClose}>
-          Close
-        </button>
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <h2>{donation.donee_name}</h2>
-        <DetailRow label="Amount" value={currency.format(Number(donation.amount))} />
+        <DetailRow label="Amount" value={currency.format(centsToCurrency(donation.amount_cents))} />
         <DetailRow label="Reference" value={donation.reference_id} />
         <DetailRow label="Donated at" value={formatDate(donation.donated_at)} />
         <DetailRow label="Status" value={donation.status} />
+        {donation.deleted_at && <DetailRow label="Deleted" value={formatDate(donation.deleted_at)} />}
         {donation.address && <DetailRow label="Address" value={donation.address} />}
         {donation.notes && <DetailRow label="Notes" value={donation.notes} />}
+        <DocumentViewer
+          recordType="donation_out"
+          recordId={donation.id}
+          documentId={donation.document_id}
+          canView
+        />
         {isAdmin && (
           <form className="donation-form modal-edit" onSubmit={handleSave}>
             <FieldGroup>
@@ -1715,6 +2626,9 @@ function DonationOutModal({
               <textarea value={editForm.notes} onChange={(event) => setEditForm({ ...editForm, notes: event.target.value })} />
             </FieldGroup>
             <button type="submit">Save changes</button>
+            <button className="danger-action" type="button" onClick={() => onDeletedChange(donation, !isDeleted)}>
+              {isDeleted ? 'Restore record' : 'Delete record'}
+            </button>
           </form>
         )}
       </section>
@@ -1727,6 +2641,186 @@ function DetailRow({ label, value }: { label: string; value: string }) {
     <div className="detail-row">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function DocumentViewer({
+  recordType,
+  recordId,
+  documentId,
+  canView,
+}: {
+  recordType: 'donation_in' | 'donation_out';
+  recordId: string;
+  documentId?: string;
+  canView: boolean;
+}) {
+  const [document, setDocument] = useState<PreviewDocument | null>(null);
+  const [loadingDocument, setLoadingDocument] = useState(false);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  const [showLargePreview, setShowLargePreview] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadDocument() {
+      if (!canView) return;
+
+      setLoadingDocument(true);
+      setDocumentError(null);
+
+      if (!supabase) {
+        setDocumentError('Supabase is not configured.');
+        setLoadingDocument(false);
+        return;
+      }
+
+      const appsScriptUrl = import.meta.env.VITE_APPS_SCRIPT_URL;
+      if (!appsScriptUrl) {
+        setDocumentError('Apps Script URL is not configured.');
+        setLoadingDocument(false);
+        return;
+      }
+
+      const { data } = await supabase!.auth.getSession();
+      const accessToken = data.session?.access_token;
+
+      if (!accessToken) {
+        setDocumentError('Please sign in again to view the document.');
+        setLoadingDocument(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(appsScriptUrl, {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'getDocumentFile',
+            accessToken,
+            donationType: recordType,
+            donationId: recordId,
+            documentId,
+          }),
+        });
+        const result = await response.json();
+
+        if (!active) return;
+
+        if (!result.ok) {
+          setDocumentError(result.error || 'Document preview failed.');
+        } else {
+          setDocument(result.document as PreviewDocument);
+        }
+      } catch (previewError) {
+        if (active) {
+          setDocumentError(previewError instanceof Error ? previewError.message : 'Document preview failed.');
+        }
+      } finally {
+        if (active) setLoadingDocument(false);
+      }
+    }
+
+    loadDocument();
+
+    return () => {
+      active = false;
+    };
+  }, [canView, documentId, recordId, recordType]);
+
+  if (!canView) {
+    return <p className="muted document-note">Document is visible only to the donor and admins.</p>;
+  }
+
+  if (loadingDocument) {
+    return <p className="muted document-note">Loading document...</p>;
+  }
+
+  if (documentError) {
+    return <p className="error-banner">{documentError}</p>;
+  }
+
+  if (!document) return null;
+
+  const previewDocument = document;
+  const dataUrl = getDocumentDataUrl(previewDocument);
+  const isImage = previewDocument.mime_type.startsWith('image/');
+  const isPdf = previewDocument.mime_type === 'application/pdf';
+
+  function handleDownload() {
+    downloadDocument(previewDocument);
+  }
+
+  function handlePrint() {
+    printDocumentInPage(previewDocument);
+  }
+
+  return (
+    <section className="document-viewer">
+      <div className="section-header">
+        <h3>Document</h3>
+        <div className="document-actions">
+          <button type="button" onClick={() => setShowLargePreview(true)}>
+            <ExternalLink aria-hidden="true" />
+            View
+          </button>
+          <button type="button" onClick={handleDownload}>
+            <Download aria-hidden="true" />
+            Download
+          </button>
+          <button type="button" onClick={handlePrint}>
+            <Printer aria-hidden="true" />
+            Print
+          </button>
+        </div>
+      </div>
+
+      {isImage && <img className="document-full-preview" src={dataUrl} alt={document.file_name} />}
+      {isPdf && (
+        <div className="pdf-document-card">
+          <FileText aria-hidden="true" />
+          <div>
+            <strong>PDF document</strong>
+            <span>{document.file_name}</span>
+          </div>
+        </div>
+      )}
+      {!isImage && !isPdf && (
+        <p className="muted">Preview is not available for this file type. Use View or Download.</p>
+      )}
+      <p className="muted document-file-name">{document.file_name}</p>
+      {showLargePreview && (
+        <DocumentPreviewModal document={previewDocument} onClose={() => setShowLargePreview(false)} />
+      )}
+    </section>
+  );
+}
+
+function DocumentPreviewModal({ document, onClose }: { document: PreviewDocument; onClose: () => void }) {
+  const dataUrl = getDocumentDataUrl(document);
+  const isImage = document.mime_type.startsWith('image/');
+  const isPdf = document.mime_type === 'application/pdf';
+
+  return (
+    <div className="document-preview-backdrop" onClick={onClose}>
+      <section className="document-preview-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <div className="section-header">
+          <h3>{document.file_name}</h3>
+          <div className="document-actions">
+            <button type="button" onClick={() => downloadDocument(document)}>
+              <Download aria-hidden="true" />
+              Download
+            </button>
+            <button type="button" onClick={() => printDocumentInPage(document)}>
+              <Printer aria-hidden="true" />
+              Print
+            </button>
+          </div>
+        </div>
+        {isImage && <img className="document-large-image" src={dataUrl} alt={document.file_name} />}
+        {isPdf && <iframe className="document-large-frame" src={dataUrl} title={document.file_name} />}
+        {!isImage && !isPdf && <p className="muted">Preview is not available for this file type.</p>}
+      </section>
     </div>
   );
 }
@@ -1746,6 +2840,20 @@ function validateDonationForm(form: DonationForm, uploadedDocument: UploadedDocu
   return errors;
 }
 
+function validateDonationEditForm(form: DonationForm, uploadedDocument: UploadedDocument | null, uploadStatus: UploadStatus) {
+  const errors: FieldErrors = {};
+
+  if (!form.donated_at) errors.donated_at = 'Donated date is required.';
+  if (!form.reference_id.trim()) errors.reference_id = 'Reference ID is required.';
+  if (!form.amount || Number(form.amount) <= 0) errors.amount = 'Amount must be greater than zero.';
+  if (form.file && uploadStatus === 'uploading') errors.file = 'Document is still uploading.';
+  if (form.file && uploadStatus === 'error') errors.file = 'Document upload failed. Replace the file and try again.';
+  if (form.file && uploadStatus !== 'uploading' && !uploadedDocument) errors.file = 'Document must be uploaded before saving.';
+  if (form.file && !isValidDocumentFile(form.file)) errors.file = 'Upload an image or PDF document.';
+
+  return errors;
+}
+
 function validateDonationOutForm(form: DonationOutForm, uploadedDocument: UploadedDocument | null, uploadStatus: UploadStatus) {
   const errors = validateDonationForm(form, uploadedDocument, uploadStatus);
   if (!form.donee_name.trim()) errors.donee_name = 'Donee name is required.';
@@ -1755,6 +2863,132 @@ function validateDonationOutForm(form: DonationOutForm, uploadedDocument: Upload
 
 function isValidDocumentFile(file: File) {
   return file.type.startsWith('image/') || file.type === 'application/pdf';
+}
+
+function currencyToCents(value: string) {
+  return Math.round(Number(value) * 100);
+}
+
+function centsToCurrency(value: number) {
+  return Number(value) / 100;
+}
+
+function getDocumentDataUrl(document: PreviewDocument) {
+  return `data:${document.mime_type};base64,${document.base64}`;
+}
+
+function downloadDocument(document: PreviewDocument) {
+  const dataUrl = getDocumentDataUrl(document);
+  const link = window.document.createElement('a');
+  link.href = dataUrl;
+  link.download = document.file_name;
+  link.style.display = 'none';
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function printDocumentInPage(document: PreviewDocument) {
+  const dataUrl = getDocumentDataUrl(document);
+  const printFrame = window.document.createElement('iframe');
+  const escapedName = escapeHtml(document.file_name);
+
+  printFrame.className = 'print-frame';
+  window.document.body.appendChild(printFrame);
+
+  const cleanup = () => {
+    window.setTimeout(() => {
+      printFrame.remove();
+    }, 60000);
+  };
+
+  if (!printFrame.contentWindow) {
+    printFrame.remove();
+    return;
+  }
+
+  if (!document.mime_type.startsWith('image/')) {
+    printFrame.onload = () => {
+      window.setTimeout(() => {
+        printFrame.contentWindow?.focus();
+        printFrame.contentWindow?.print();
+        cleanup();
+      }, 500);
+    };
+    printFrame.src = dataUrl;
+    return;
+  }
+
+  const frameDocument = printFrame.contentDocument || printFrame.contentWindow.document;
+  if (!frameDocument) {
+    printFrame.remove();
+    return;
+  }
+
+  frameDocument.open();
+  frameDocument.write(`
+    <!doctype html>
+    <html>
+      <head>
+        <title>${escapedName}</title>
+        <style>
+          html,
+          body {
+            margin: 0;
+            min-height: 100%;
+          }
+
+          body {
+            display: grid;
+            place-items: center;
+            background: #ffffff;
+          }
+
+          img {
+            max-width: 100%;
+            max-height: 100vh;
+            object-fit: contain;
+          }
+
+          iframe {
+            width: 100vw;
+            height: 100vh;
+            border: 0;
+          }
+        </style>
+      </head>
+      <body>
+        <img src="${dataUrl}" alt="${escapedName}" />
+        <script>
+          window.addEventListener('load', function () {
+            window.focus();
+            setTimeout(function () {
+              window.print();
+            }, 400);
+          });
+        </script>
+      </body>
+    </html>
+  `);
+  frameDocument.close();
+  cleanup();
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      default:
+        return '&#039;';
+    }
+  });
 }
 
 function fileToBase64(file: File) {

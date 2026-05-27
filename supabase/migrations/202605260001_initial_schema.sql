@@ -56,7 +56,7 @@ create table if not exists public.donations_in (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references public.profiles(id) on delete restrict,
   donated_at timestamptz not null,
-  amount numeric(12, 2) not null check (amount > 0),
+  amount_cents bigint not null check (amount_cents > 0),
   reference_id text not null unique,
   status public.donation_status not null default 'pending',
   notes text,
@@ -70,7 +70,7 @@ create table if not exists public.donations_out (
   donee_name text not null,
   address text,
   donated_at timestamptz not null,
-  amount numeric(12, 2) not null check (amount > 0),
+  amount_cents bigint not null check (amount_cents > 0),
   reference_id text not null unique,
   status public.donation_status not null default 'pending',
   notes text,
@@ -135,7 +135,7 @@ create or replace view public.public_donations_in as
 select
   di.id,
   di.donated_at,
-  di.amount,
+  di.amount_cents,
   di.reference_id,
   di.status,
   p.username as donor_username
