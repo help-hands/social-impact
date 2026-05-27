@@ -21,6 +21,7 @@ if (!databaseUrl) {
 
 console.log('Database migration target:');
 console.log(maskDatabaseUrl(databaseUrl));
+printDatabaseTargetHint(databaseUrl);
 
 if (looksLikePlainLocalPostgres(databaseUrl)) {
   console.error('');
@@ -28,6 +29,15 @@ if (looksLikePlainLocalPostgres(databaseUrl)) {
   console.error('This project needs a Supabase database because migrations reference auth.users and auth.uid().');
   console.error('Run `supabase start`, then set DATABASE_URL to:');
   console.error('postgresql://postgres:postgres@127.0.0.1:54322/postgres');
+  process.exit(1);
+}
+
+if (process.env.CI && looksLikeSupabaseDirectConnection(databaseUrl)) {
+  console.error('');
+  console.error('This looks like a Supabase direct connection URL.');
+  console.error('GitHub Actions often cannot reach Supabase direct database URLs because they require IPv6.');
+  console.error('Use the Supabase Session pooler connection string for the GitHub DATABASE_URL secret.');
+  console.error('Expected shape: postgresql://postgres.<project-ref>:***@aws-0-<region>.pooler.supabase.com:5432/postgres');
   process.exit(1);
 }
 
@@ -96,6 +106,29 @@ function maskDatabaseUrl(value) {
     return url.toString();
   } catch {
     return value.replace(/:\/\/([^:\s]+):([^@\s]+)@/, '://$1:***@');
+  }
+}
+
+function printDatabaseTargetHint(value) {
+  try {
+    const url = new URL(value);
+    const username = url.username.includes('.') ? url.username.replace(/\.[^.]+$/, '.<project-ref>') : url.username;
+
+    console.log(`Host: ${url.hostname}`);
+    console.log(`Port: ${url.port || '(default)'}`);
+    console.log(`User: ${username}`);
+  } catch {
+    console.log('Could not parse DATABASE_URL for target details.');
+  }
+}
+
+function looksLikeSupabaseDirectConnection(value) {
+  try {
+    const url = new URL(value);
+
+    return url.hostname.startsWith('db.') && url.hostname.endsWith('.supabase.co');
+  } catch {
+    return false;
   }
 }
 
