@@ -45,6 +45,15 @@ jobs:
         with:
           version: latest
 
+      - name: Check DATABASE_URL secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is missing. Add it in GitHub repository Settings > Secrets and variables > Actions > Secrets."
+            exit 1
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
       - name: Apply migrations
         run: pnpm run migration
         env:
