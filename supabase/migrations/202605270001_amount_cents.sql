@@ -4,31 +4,101 @@ drop view if exists public.community_donations_in;
 drop view if exists public.community_donations_out;
 drop view if exists public.public_donations_in;
 
-alter table public.donations_in
-rename column amount to amount_cents;
-
-alter table public.donations_in
-alter column amount_cents type bigint
-using round(amount_cents * 100)::bigint;
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'donations_in'
+      and column_name = 'amount'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'donations_in'
+      and column_name = 'amount_cents'
+  ) then
+    alter table public.donations_in rename column amount to amount_cents;
+    alter table public.donations_in
+      alter column amount_cents type bigint
+      using round(amount_cents * 100)::bigint;
+  elsif exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'donations_in'
+      and column_name = 'amount_cents'
+  ) then
+    alter table public.donations_in
+      alter column amount_cents type bigint
+      using amount_cents::bigint;
+  end if;
+end $$;
 
 alter table public.donations_in
 drop constraint if exists donations_in_amount_check;
 
-alter table public.donations_in
-add constraint donations_in_amount_cents_check check (amount_cents > 0);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.donations_in'::regclass
+      and conname = 'donations_in_amount_cents_check'
+  ) then
+    alter table public.donations_in
+      add constraint donations_in_amount_cents_check check (amount_cents > 0);
+  end if;
+end $$;
 
-alter table public.donations_out
-rename column amount to amount_cents;
-
-alter table public.donations_out
-alter column amount_cents type bigint
-using round(amount_cents * 100)::bigint;
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'donations_out'
+      and column_name = 'amount'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'donations_out'
+      and column_name = 'amount_cents'
+  ) then
+    alter table public.donations_out rename column amount to amount_cents;
+    alter table public.donations_out
+      alter column amount_cents type bigint
+      using round(amount_cents * 100)::bigint;
+  elsif exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'donations_out'
+      and column_name = 'amount_cents'
+  ) then
+    alter table public.donations_out
+      alter column amount_cents type bigint
+      using amount_cents::bigint;
+  end if;
+end $$;
 
 alter table public.donations_out
 drop constraint if exists donations_out_amount_check;
 
-alter table public.donations_out
-add constraint donations_out_amount_cents_check check (amount_cents > 0);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.donations_out'::regclass
+      and conname = 'donations_out_amount_cents_check'
+  ) then
+    alter table public.donations_out
+      add constraint donations_out_amount_cents_check check (amount_cents > 0);
+  end if;
+end $$;
 
 create or replace view public.community_donations_in as
 select
