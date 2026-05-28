@@ -2889,15 +2889,16 @@ function downloadDocument(document: PreviewDocument) {
 }
 
 function printDocumentInPage(document: PreviewDocument) {
-  const dataUrl = getDocumentDataUrl(document);
   const printFrame = window.document.createElement('iframe');
   const escapedName = escapeHtml(document.file_name);
+  const objectUrl = URL.createObjectURL(base64ToBlob(document.base64, document.mime_type));
 
   printFrame.className = 'print-frame';
   window.document.body.appendChild(printFrame);
 
   const cleanup = () => {
     window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
       printFrame.remove();
     }, 60000);
   };
@@ -2915,7 +2916,7 @@ function printDocumentInPage(document: PreviewDocument) {
         cleanup();
       }, 500);
     };
-    printFrame.src = dataUrl;
+    printFrame.src = objectUrl;
     return;
   }
 
@@ -2958,7 +2959,7 @@ function printDocumentInPage(document: PreviewDocument) {
         </style>
       </head>
       <body>
-        <img src="${dataUrl}" alt="${escapedName}" />
+        <img src="${objectUrl}" alt="${escapedName}" />
         <script>
           window.addEventListener('load', function () {
             window.focus();
@@ -2972,6 +2973,24 @@ function printDocumentInPage(document: PreviewDocument) {
   `);
   frameDocument.close();
   cleanup();
+}
+
+function base64ToBlob(base64: string, mimeType: string) {
+  const bytes = window.atob(base64);
+  const byteArrays = [];
+
+  for (let offset = 0; offset < bytes.length; offset += 512) {
+    const slice = bytes.slice(offset, offset + 512);
+    const byteNumbers = new Array(slice.length);
+
+    for (let index = 0; index < slice.length; index += 1) {
+      byteNumbers[index] = slice.charCodeAt(index);
+    }
+
+    byteArrays.push(new Uint8Array(byteNumbers));
+  }
+
+  return new Blob(byteArrays, { type: mimeType });
 }
 
 function escapeHtml(value: string) {
