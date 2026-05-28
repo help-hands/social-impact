@@ -119,6 +119,27 @@ type DonationOutMedia = {
   updated_at: string;
 };
 
+type PublicDonationOutPage = {
+  id: string;
+  donee_name: string;
+  donated_at: string;
+  amount_cents: number;
+  method: DonationMethod;
+  reference_id: string;
+  detail_id: string;
+  title: string | null;
+  subtitle: string | null;
+  description: string | null;
+  contact_info: string | null;
+  detail_updated_at: string;
+};
+
+type PublicOrganizationStats = {
+  donation_distribution_count: number;
+  member_count: number;
+  documented_support_total_cents: number;
+};
+
 type DonationIn = {
   id: string;
   user_id: string | null;
@@ -316,6 +337,236 @@ function ConfirmModal({
   );
 }
 
+function PublicShell({
+  authPanel,
+  children,
+  detail,
+  detailDonation,
+  detailDonationOutId,
+  detailMedia,
+  error,
+  loading,
+  onCloseAuth,
+  onOpenSignIn,
+  onOpenSignUp,
+  publicDataLoaded,
+  slides,
+  stats,
+}: {
+  authPanel: ReactNode;
+  children: ReactNode;
+  detail: DonationOutDetail | null;
+  detailDonation: DonationOut | null;
+  detailDonationOutId: string | null;
+  detailMedia: DonationOutMedia[];
+  error: string | null;
+  loading: boolean;
+  onCloseAuth: () => void;
+  onOpenSignIn: () => void;
+  onOpenSignUp: () => void;
+  publicDataLoaded: boolean;
+  slides: Array<{
+    donation: DonationOut;
+    detail: DonationOutDetail;
+    cover: DonationOutMedia;
+  }>;
+  stats: PublicOrganizationStats | null;
+}) {
+  return (
+    <div className="app-layout public-layout">
+      {children}
+      <header className="topbar public-topbar">
+        <div className="brand-block">
+          <p className="eyebrow">Donation Records</p>
+          <h1>Social Impact</h1>
+        </div>
+        <div className="public-auth-actions">
+          <button className="secondary-action" type="button" onClick={onOpenSignIn}>
+            Sign in
+          </button>
+          <button className="primary-action-inline" type="button" onClick={onOpenSignUp}>
+            Sign up
+          </button>
+        </div>
+      </header>
+
+      <main className="content public-content">
+        {error && <p className="error-banner">{error}</p>}
+
+        {detailDonationOutId ? (
+          !detailDonation && (loading || !publicDataLoaded) ? (
+            <section className="record-section">
+              <EmptyState title="Loading donation page..." />
+            </section>
+          ) : (
+            <DonationOutDetailPage
+              donation={detailDonation}
+              detail={detail}
+              media={detailMedia}
+              isAdmin={false}
+            />
+          )
+        ) : (
+          <PublicHomePage slides={slides} stats={stats} />
+        )}
+      </main>
+
+      {authPanel && (
+        <div className="modal-backdrop public-auth-backdrop" onClick={onCloseAuth}>
+          {authPanel}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PublicHomePage({
+  slides,
+  stats,
+}: {
+  slides: Array<{
+    donation: DonationOut;
+    detail: DonationOutDetail;
+    cover: DonationOutMedia;
+  }>;
+  stats: PublicOrganizationStats | null;
+}) {
+  const distributionCount =
+    stats?.donation_distribution_count ?? slides.length;
+  const documentedSupport = centsToCurrency(
+    stats?.documented_support_total_cents ??
+      slides.reduce((sum, slide) => sum + slide.donation.amount_cents, 0),
+  );
+
+  return (
+    <>
+      <DonationOutHeroCarousel slides={slides} />
+
+      <section className="public-intro">
+        <div>
+          <p className="eyebrow">Community impact</p>
+          <h2>Transparent support for people who need it most.</h2>
+          <p>
+            This site helps our charity organization keep donation records
+            documented. Sign up to become a member.
+          </p>
+        </div>
+        <div className="public-intro-stats" aria-label="Public organization summary">
+          <article>
+            <span>Donation distributions</span>
+            <strong>{distributionCount}</strong>
+          </article>
+          <article>
+            <span>Members</span>
+            <strong>{stats ? stats.member_count : "Pending"}</strong>
+          </article>
+          <article>
+            <span>Documented support</span>
+            <strong>{currency.format(documentedSupport)}</strong>
+          </article>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function GoogleMark() {
+  return (
+    <span className="google-mark" aria-hidden="true">
+      G
+    </span>
+  );
+}
+
+function AuthPanel({
+  authLoading,
+  authMode,
+  authNotice,
+  email,
+  error,
+  onEmailChange,
+  onGoogleAuth,
+  onModeChange,
+  onPasswordChange,
+  onSubmit,
+  password,
+}: {
+  authLoading: boolean;
+  authMode: AuthMode;
+  authNotice: string | null;
+  email: string;
+  error: string | null;
+  onEmailChange: (value: string) => void;
+  onGoogleAuth: () => void;
+  onModeChange: (mode: AuthMode) => void;
+  onPasswordChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  password: string;
+}) {
+  return (
+    <section className="auth-panel">
+      <ShieldCheck aria-hidden="true" />
+      <h1>Social Impact</h1>
+      <p>Sign in to manage charity donation records.</p>
+
+      <div className="auth-tabs" aria-label="Authentication mode">
+        <button
+          className={authMode === "sign-in" ? "active" : ""}
+          type="button"
+          onClick={() => onModeChange("sign-in")}
+        >
+          Sign in
+        </button>
+        <button
+          className={authMode === "sign-up" ? "active" : ""}
+          type="button"
+          onClick={() => onModeChange("sign-up")}
+        >
+          Sign up
+        </button>
+      </div>
+
+      <button
+        className="primary-button google-button"
+        type="button"
+        onClick={onGoogleAuth}
+        disabled={authLoading}
+      >
+        <GoogleMark />
+        Continue with Google
+      </button>
+
+      <div className="auth-divider">
+        <span>or</span>
+      </div>
+
+      <form className="auth-form" onSubmit={onSubmit}>
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(event) => onEmailChange(event.target.value)}
+          required
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(event) => onPasswordChange(event.target.value)}
+          minLength={6}
+          required
+        />
+        <button type="submit" disabled={authLoading}>
+          {authMode === "sign-in" ? "Sign in" : "Create account"}
+        </button>
+      </form>
+
+      {authNotice && <p className="success-text">{authNotice}</p>}
+      {error && <p className="error-text">{error}</p>}
+    </section>
+  );
+}
+
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
@@ -347,6 +598,9 @@ export function App() {
   );
   const [pendingDonationCount, setPendingDonationCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [publicDataLoaded, setPublicDataLoaded] = useState(false);
+  const [publicStats, setPublicStats] =
+    useState<PublicOrganizationStats | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [savingDonation, setSavingDonation] = useState(false);
@@ -354,6 +608,7 @@ export function App() {
   const [toast, setToast] = useState<ToastState>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmState>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [publicAuthOpen, setPublicAuthOpen] = useState(false);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
   const [adminCreateMode, setAdminCreateMode] =
@@ -547,6 +802,90 @@ export function App() {
 
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
+
+  useEffect(() => {
+    if (!supabase || session) return;
+
+    async function loadPublicDonationPages() {
+      setLoading(true);
+      setPublicDataLoaded(false);
+      setError(null);
+
+      const [pagesResult, mediaResult, statsResult] = await Promise.all([
+        supabase!
+          .from("public_donation_out_pages")
+          .select(
+            "id, donee_name, donated_at, amount_cents, method, reference_id, detail_id, title, subtitle, description, contact_info, detail_updated_at",
+          )
+          .order("donated_at", { ascending: false })
+          .limit(24),
+        supabase!
+          .from("public_donation_out_page_media")
+          .select(
+            "id, donation_out_id, media_type, file_name, mime_type, caption, thumbnail_data_url, sort_order, created_at, updated_at",
+          )
+          .order("sort_order", { ascending: true }),
+        supabase!
+          .from("public_organization_stats")
+          .select(
+            "donation_distribution_count, member_count, documented_support_total_cents",
+          )
+          .maybeSingle(),
+      ]);
+
+      if (pagesResult.error || mediaResult.error) {
+        setError(
+          pagesResult.error?.message ??
+            mediaResult.error?.message ??
+            "Unable to load public donation pages.",
+        );
+      } else {
+        const pages = (pagesResult.data ?? []) as PublicDonationOutPage[];
+        setPublicStats(
+          statsResult.error
+            ? null
+            : (statsResult.data as PublicOrganizationStats | null),
+        );
+        setDonationsOut(
+          pages.map((page) => ({
+            id: page.id,
+            donee_name: page.donee_name,
+            donated_at: page.donated_at,
+            amount_cents: page.amount_cents,
+            method: page.method,
+            reference_id: page.reference_id,
+            status: "success",
+            created_at: page.detail_updated_at,
+            updated_at: page.detail_updated_at,
+          })),
+        );
+        setDonationOutDetails(
+          pages.map((page) => ({
+            id: page.detail_id,
+            donation_out_id: page.id,
+            title: page.title,
+            subtitle: page.subtitle,
+            description: page.description,
+            contact_info: page.contact_info,
+            is_published: true,
+            created_at: page.detail_updated_at,
+            updated_at: page.detail_updated_at,
+          })),
+        );
+        setDonationOutMedia(
+          (mediaResult.data ?? []).map((item) => ({
+            ...item,
+            document_id: "",
+          })) as DonationOutMedia[],
+        );
+      }
+
+      setLoading(false);
+      setPublicDataLoaded(true);
+    }
+
+    loadPublicDonationPages();
+  }, [session]);
 
   useEffect(() => {
     if (!supabase || !session) {
@@ -878,6 +1217,8 @@ export function App() {
     setDonationsOut([]);
     setDonationOutDetails([]);
     setDonationOutMedia([]);
+    setPublicDataLoaded(false);
+    setPublicStats(null);
     setDeletedDonationsIn([]);
     setDeletedDonationsOut([]);
     window.location.hash = "";
@@ -2036,73 +2377,63 @@ export function App() {
 
   if (!session) {
     return (
-      <main className="app-shell centered">
+      <PublicShell
+        authPanel={
+          publicAuthOpen ? (
+            <div onClick={(event) => event.stopPropagation()}>
+              <AuthPanel
+                authLoading={authLoading}
+                authMode={authMode}
+                authNotice={authNotice}
+                email={email}
+                error={error}
+                onEmailChange={setEmail}
+                onGoogleAuth={handleGoogleAuth}
+                onModeChange={(mode) => {
+                  setAuthMode(mode);
+                  setError(null);
+                  setAuthNotice(null);
+                }}
+                onPasswordChange={setPassword}
+                onSubmit={handleEmailAuth}
+                password={password}
+              />
+            </div>
+          ) : null
+        }
+        detail={
+          detailDonationOutId
+            ? (donationOutDetails.find(
+                (item) => item.donation_out_id === detailDonationOutId,
+              ) ?? null)
+            : null
+        }
+        detailDonation={selectedDetailDonationOut}
+        detailDonationOutId={detailDonationOutId}
+        detailMedia={donationOutMedia
+          .filter((item) => item.donation_out_id === detailDonationOutId)
+          .sort(sortMedia)}
+        error={publicAuthOpen ? null : error}
+        loading={loading}
+        onCloseAuth={() => setPublicAuthOpen(false)}
+        onOpenSignIn={() => {
+          setAuthMode("sign-in");
+          setAuthNotice(null);
+          setError(null);
+          setPublicAuthOpen(true);
+        }}
+        onOpenSignUp={() => {
+          setAuthMode("sign-up");
+          setAuthNotice(null);
+          setError(null);
+          setPublicAuthOpen(true);
+        }}
+        publicDataLoaded={publicDataLoaded}
+        slides={donationOutPageSlides}
+        stats={publicStats}
+      >
         <Toast toast={toast} />
-        <section className="auth-panel">
-          <ShieldCheck aria-hidden="true" />
-          <h1>Social Impact</h1>
-          <p>Sign in to manage charity donation records.</p>
-
-          <div className="auth-tabs" aria-label="Authentication mode">
-            <button
-              className={authMode === "sign-in" ? "active" : ""}
-              type="button"
-              onClick={() => {
-                setAuthMode("sign-in");
-                setError(null);
-                setAuthNotice(null);
-              }}
-            >
-              Sign in
-            </button>
-            <button
-              className={authMode === "sign-up" ? "active" : ""}
-              type="button"
-              onClick={() => {
-                setAuthMode("sign-up");
-                setError(null);
-                setAuthNotice(null);
-              }}
-            >
-              Sign up
-            </button>
-          </div>
-
-          <button
-            className="primary-button"
-            type="button"
-            onClick={handleGoogleAuth}
-            disabled={authLoading}
-          >
-            <Mail aria-hidden="true" />
-            Continue with Google
-          </button>
-
-          <form className="auth-form" onSubmit={handleEmailAuth}>
-            <input
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              minLength={6}
-              required
-            />
-            <button type="submit" disabled={authLoading}>
-              {authMode === "sign-in" ? "Sign in" : "Create account"}
-            </button>
-          </form>
-
-          {authNotice && <p className="success-text">{authNotice}</p>}
-          {error && <p className="error-text">{error}</p>}
-        </section>
-      </main>
+      </PublicShell>
     );
   }
 
@@ -4323,7 +4654,7 @@ function DonationOutHeroCarousel({
       <section className="story-hero story-hero-empty">
         <div>
           <p className="eyebrow">Donation stories</p>
-          <h2>Your donations will show here</h2>
+          <h2>Published stories will show here</h2>
           <span>
             Published donation-out pages with images will appear in this
             carousel.
@@ -4637,18 +4968,24 @@ function MediaPreview({
 
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
-      if (!accessToken) return;
-
-      try {
-        const response = await fetch(appsScriptUrl, {
-          method: "POST",
-          body: JSON.stringify({
+      const payload = accessToken
+        ? {
             action: "getDocumentFile",
             accessToken,
             donationType: "donation_out",
             donationId,
             documentId: media.document_id,
-          }),
+          }
+        : {
+            action: "getPublicDonationOutMedia",
+            donationId,
+            mediaId: media.id,
+          };
+
+      try {
+        const response = await fetch(appsScriptUrl, {
+          method: "POST",
+          body: JSON.stringify(payload),
         });
         const result = await response.json();
 
@@ -4669,7 +5006,7 @@ function MediaPreview({
     return () => {
       active = false;
     };
-  }, [donationId, media.document_id]);
+  }, [donationId, media.document_id, media.id]);
 
   if (failed) {
     return (

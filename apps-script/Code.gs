@@ -7,7 +7,7 @@ function doGet() {
   return jsonResponse({
     ok: true,
     service: 'social-impact-apps-script',
-    actions: ['setupDriveFolders', 'uploadDocument', 'uploadDonationOutMedia', 'getDocumentFile', 'createSnapshot'],
+    actions: ['setupDriveFolders', 'uploadDocument', 'uploadDonationOutMedia', 'getDocumentFile', 'getPublicDonationOutMedia', 'createSnapshot'],
     folders: folders
   });
 }
@@ -26,6 +26,10 @@ function doPost(event) {
 
     if (payload.action === 'getDocumentFile') {
       return jsonResponse(getDocumentFile(payload));
+    }
+
+    if (payload.action === 'getPublicDonationOutMedia') {
+      return jsonResponse(getPublicDonationOutMedia(payload));
     }
 
     if (payload.action === 'setupDriveFolders') {
@@ -88,6 +92,83 @@ function uploadDonationOutMedia(payload) {
   return {
     ok: true,
     document: documentRows[0]
+  };
+}
+
+function getPublicDonationOutMedia(payload) {
+  requireFields(payload, ['donationId']);
+
+  if (!payload.mediaId && !payload.documentId) {
+    throw new Error('mediaId is required.');
+  }
+
+  var donation = getDonationRecord('donation_out', payload.donationId);
+  if (donation.status !== 'success' || donation.deleted_at) {
+    throw new Error('This donation-out page is not available.');
+  }
+
+  var documentId = payload.documentId;
+
+  if (payload.mediaId) {
+    var mediaRows = supabaseRest(
+      'donation_out_media',
+      'get',
+      null,
+      '?select=document_id&donation_out_id=eq.' +
+        encodeURIComponent(donation.id) +
+        '&id=eq.' +
+        encodeURIComponent(payload.mediaId) +
+        '&limit=1',
+      {}
+    );
+
+    if (!mediaRows.length) {
+      throw new Error('Media was not found.');
+    }
+
+    documentId = mediaRows[0].document_id;
+  }
+
+  ensureDonationOutMediaCanBeViewed(documentId, donation.id, false);
+
+  var documents = supabaseRest(
+    'documents',
+    'get',
+    null,
+    '?select=*&id=eq.' + encodeURIComponent(documentId) + '&limit=1',
+    {}
+  );
+
+  if (!documents.length) {
+    throw new Error('Document was not found.');
+  }
+
+  var document = documents[0];
+  if (!isAllowedDonationOutMediaType(document.mime_type)) {
+    throw new Error('This file cannot be viewed publicly.');
+  }
+
+  var file = DriveApp.getFileById(document.drive_file_id);
+  var blob = file.getBlob();
+  var bytes = blob.getBytes();
+  var maxBytes = Number(getOptionalProperty('PUBLIC_MEDIA_PREVIEW_MAX_BYTES') ||
+    getOptionalProperty('DOCUMENT_PREVIEW_MAX_BYTES') ||
+    10485760);
+
+  if (bytes.length > maxBytes) {
+    throw new Error('Media is too large to preview.');
+  }
+
+  return {
+    ok: true,
+    document: {
+      id: document.id,
+      drive_file_id: '',
+      url: '',
+      file_name: document.file_name,
+      mime_type: document.mime_type,
+      base64: Utilities.base64Encode(bytes)
+    }
   };
 }
 
