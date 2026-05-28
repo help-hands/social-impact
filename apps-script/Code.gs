@@ -1,4 +1,4 @@
-var TABLES_TO_SNAPSHOT = ['profiles', 'roles', 'donations_in', 'donations_out', 'documents'];
+var TABLES_TO_SNAPSHOT = ['profiles', 'roles', 'donations_in', 'donations_out', 'documents', 'donation_out_details', 'donation_out_media'];
 var APP_ROOT_FOLDER_NAME = 'Social Impact';
 
 function doGet() {
@@ -7,7 +7,7 @@ function doGet() {
   return jsonResponse({
     ok: true,
     service: 'social-impact-apps-script',
-    actions: ['setupDriveFolders', 'uploadDocument', 'getDocumentFile', 'createSnapshot'],
+    actions: ['setupDriveFolders', 'uploadDocument', 'uploadDonationOutMedia', 'getDocumentFile', 'createSnapshot'],
     folders: folders
   });
 }
@@ -18,6 +18,10 @@ function doPost(event) {
 
     if (payload.action === 'uploadDocument') {
       return jsonResponse(uploadDocument(payload));
+    }
+
+    if (payload.action === 'uploadDonationOutMedia') {
+      return jsonResponse(uploadDonationOutMedia(payload));
     }
 
     if (payload.action === 'getDocumentFile') {
@@ -42,6 +46,49 @@ function doPost(event) {
       error: error.message || String(error)
     });
   }
+}
+
+function uploadDonationOutMedia(payload) {
+  requireFields(payload, ['accessToken', 'donationId', 'fileName', 'mimeType', 'base64']);
+
+  if (!isAllowedDonationOutMediaType(payload.mimeType)) {
+    throw new Error('Only image and video files can be uploaded for donation-out detail pages.');
+  }
+
+  var user = verifySupabaseUser(payload.accessToken);
+  if (!isAdmin(user.id)) {
+    throw new Error('Only admins can upload donation-out page media.');
+  }
+
+  var donation = getDonationRecord('donation_out', payload.donationId);
+  var folders = ensureDriveFolders();
+  var dateFolder = getOrCreateDonationDateFolder(folders.donationOutFolderId, donation.donated_at);
+  var mediaFolder = getOrCreateChildFolder(dateFolder, 'page-media');
+  var bytes = decodeBase64(payload.base64);
+  var blob = Utilities.newBlob(bytes, payload.mimeType, sanitizeFileName(payload.fileName));
+  var file = mediaFolder.createFile(blob);
+
+  if (getOptionalProperty('DOCUMENT_LINK_ACCESS') === 'public') {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  }
+
+  var documentRows = supabaseRest('documents', 'post', {
+    drive_file_id: file.getId(),
+    url: file.getUrl(),
+    mime_type: payload.mimeType,
+    file_name: file.getName(),
+    folder_type: 'donation_out',
+    uploaded_by: user.id
+  }, '', { prefer: 'return=representation' });
+
+  if (!documentRows.length) {
+    throw new Error('Document row was not created.');
+  }
+
+  return {
+    ok: true,
+    document: documentRows[0]
+  };
 }
 
 function uploadDocument(payload) {
@@ -125,11 +172,25 @@ function getDocumentFile(payload) {
     throw new Error('You do not have permission to view this document.');
   }
 
+  var documentId = payload.documentId || donation.document_id;
+
+  if (payload.donationType === 'donation_out' && documentId !== donation.document_id) {
+    if (!admin && (donation.status !== 'success' || donation.deleted_at)) {
+      throw new Error('This donation-out page is not available.');
+    }
+
+    ensureDonationOutMediaCanBeViewed(documentId, donation.id, admin);
+  }
+
+  if (payload.donationType === 'donation_in' && documentId !== donation.document_id) {
+    throw new Error('Document does not belong to this donation.');
+  }
+
   var documents = supabaseRest(
     'documents',
     'get',
     null,
-    '?select=*&id=eq.' + encodeURIComponent(donation.document_id) + '&limit=1',
+    '?select=*&id=eq.' + encodeURIComponent(documentId) + '&limit=1',
     {}
   );
 
@@ -158,6 +219,38 @@ function getDocumentFile(payload) {
       base64: Utilities.base64Encode(bytes)
     }
   };
+}
+
+function ensureDonationOutMediaCanBeViewed(documentId, donationId, admin) {
+  var mediaRows = supabaseRest(
+    'donation_out_media',
+    'get',
+    null,
+    '?select=donation_out_id,document_id&donation_out_id=eq.' +
+      encodeURIComponent(donationId) +
+      '&document_id=eq.' +
+      encodeURIComponent(documentId) +
+      '&limit=1',
+    {}
+  );
+
+  if (!mediaRows.length) {
+    throw new Error('Document does not belong to this donation-out page.');
+  }
+
+  if (admin) return;
+
+  var detailRows = supabaseRest(
+    'donation_out_details',
+    'get',
+    null,
+    '?select=is_published&donation_out_id=eq.' + encodeURIComponent(donationId) + '&limit=1',
+    {}
+  );
+
+  if (!detailRows.length || detailRows[0].is_published !== true) {
+    throw new Error('This donation-out page is not published.');
+  }
 }
 
 function createSnapshot(payload) {
@@ -383,6 +476,10 @@ function ensureMonthFolders(yearFolder) {
   months.forEach(function(month) {
     getOrCreateChildFolder(yearFolder, month);
   });
+}
+
+function isAllowedDonationOutMediaType(mimeType) {
+  return String(mimeType).indexOf('image/') === 0 || String(mimeType).indexOf('video/') === 0;
 }
 
 function decodeBase64(value) {
