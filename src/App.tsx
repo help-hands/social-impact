@@ -23,9 +23,11 @@ import {
   Plus,
   Printer,
   ShieldCheck,
+  TrendingUp,
   UserRound,
   UsersRound,
   Video,
+  WalletCards,
 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
@@ -173,6 +175,21 @@ type ConfirmState = {
   onConfirm: () => void | Promise<void>;
 } | null;
 
+type DashboardMonth = {
+  key: string;
+  label: string;
+  contributions: number;
+  distributions: number;
+};
+
+type DashboardActivity = {
+  id: string;
+  kind: "Contribution" | "Distribution";
+  label: string;
+  amount: number;
+  date: string;
+};
+
 type UploadedDocument = {
   id: string;
   drive_file_id: string;
@@ -227,6 +244,11 @@ const dateFormatter = new Intl.DateTimeFormat("en-LK", {
   year: "numeric",
   month: "short",
   day: "2-digit",
+});
+
+const monthFormatter = new Intl.DateTimeFormat("en-LK", {
+  month: "short",
+  year: "2-digit",
 });
 
 function formatDate(value: string) {
@@ -432,6 +454,38 @@ export function App() {
       outgoingCount: successfulOutgoing.length,
     };
   }, [donationsOut, publicDonations]);
+
+  const dashboardMonths = useMemo(
+    () => buildMonthlyFlow(publicDonations, donationsOut),
+    [donationsOut, publicDonations],
+  );
+
+  const dashboardActivity = useMemo(
+    () => buildDashboardActivity(publicDonations, donationsOut),
+    [donationsOut, publicDonations],
+  );
+
+  const dashboardImpact = useMemo(() => {
+    const successfulIncoming = publicDonations.filter(
+      (donation) => donation.status === "success",
+    );
+    const contributorCount = new Set(
+      successfulIncoming.map((donation) => donation.donor_reference_id),
+    ).size;
+    const communityDonorTotal = successfulIncoming
+      .filter((donation) => isCommunityDonorContribution(donation))
+      .reduce((sum, donation) => sum + centsToCurrency(donation.amount_cents), 0);
+    const userContributionTotal = successfulIncoming
+      .filter((donation) => !isCommunityDonorContribution(donation))
+      .reduce((sum, donation) => sum + centsToCurrency(donation.amount_cents), 0);
+
+    return {
+      contributorCount,
+      communityDonorTotal,
+      userContributionTotal,
+      availableBalance: totals.incomingTotal - totals.outgoingTotal,
+    };
+  }, [publicDonations, totals.incomingTotal, totals.outgoingTotal]);
 
   const donationOutPageSlides = useMemo(
     () =>
@@ -2279,7 +2333,12 @@ export function App() {
           activeView === "dashboard" && (
             <>
               <DonationOutHeroCarousel slides={donationOutPageSlides} />
-              <section className="grid-panels">
+              <DashboardBalance
+                availableBalance={dashboardImpact.availableBalance}
+                contributionTotal={totals.incomingTotal}
+                distributionTotal={totals.outgoingTotal}
+              />
+              <section className="grid-panels balance-breakdown">
                 <article className="metric-panel">
                   <span>Community contributions</span>
                   <strong>{currency.format(totals.incomingTotal)}</strong>
@@ -2290,6 +2349,17 @@ export function App() {
                   <strong>{currency.format(totals.outgoingTotal)}</strong>
                   <small>{totals.outgoingCount} outgoing records</small>
                 </article>
+              </section>
+              <DashboardFlowChart months={dashboardMonths} />
+              <section className="dashboard-insights">
+                <DashboardImpactCards
+                  contributorCount={dashboardImpact.contributorCount}
+                  contributionCount={totals.incomingCount}
+                  distributionCount={totals.outgoingCount}
+                  communityDonorTotal={dashboardImpact.communityDonorTotal}
+                  userContributionTotal={dashboardImpact.userContributionTotal}
+                />
+                <DashboardActivityTimeline activity={dashboardActivity} />
               </section>
             </>
           )
@@ -3319,6 +3389,223 @@ function ListControls({
         <option value="donated_at">Donated</option>
       </select>
     </div>
+  );
+}
+
+function DashboardBalance({
+  availableBalance,
+  contributionTotal,
+  distributionTotal,
+}: {
+  availableBalance: number;
+  contributionTotal: number;
+  distributionTotal: number;
+}) {
+  const distributedPercent = contributionTotal
+    ? Math.min(100, Math.round((distributionTotal / contributionTotal) * 100))
+    : 0;
+
+  return (
+    <section className="dashboard-balance">
+      <div>
+        <p className="eyebrow">Available balance</p>
+        <h2>{currency.format(availableBalance)}</h2>
+        <span>
+          {currency.format(distributionTotal)} distributed from{" "}
+          {currency.format(contributionTotal)} contributed
+        </span>
+      </div>
+      <div className="balance-visual" aria-hidden="true">
+        <WalletCards />
+        <div className="balance-track">
+          <span style={{ width: `${distributedPercent}%` }} />
+        </div>
+        <small>{distributedPercent}% distributed</small>
+      </div>
+    </section>
+  );
+}
+
+function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const chartDragRef = useRef({ active: false, startX: 0, scrollLeft: 0 });
+  const [chartDragging, setChartDragging] = useState(false);
+  const maxAmount = Math.max(
+    1,
+    ...months.flatMap((month) => [month.contributions, month.distributions]),
+  );
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !months.length) return;
+
+    window.requestAnimationFrame(() => {
+      chart.scrollLeft = chart.scrollWidth - chart.clientWidth;
+    });
+  }, [months.length]);
+
+  function handleChartPointerDown(event: PointerEvent<HTMLDivElement>) {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    chartDragRef.current = {
+      active: true,
+      startX: event.clientX,
+      scrollLeft: chart.scrollLeft,
+    };
+    setChartDragging(true);
+    chart.setPointerCapture(event.pointerId);
+  }
+
+  function handleChartPointerMove(event: PointerEvent<HTMLDivElement>) {
+    const chart = chartRef.current;
+    const drag = chartDragRef.current;
+    if (!chart || !drag.active) return;
+
+    chart.scrollLeft = drag.scrollLeft - (event.clientX - drag.startX);
+  }
+
+  function endChartDrag() {
+    chartDragRef.current.active = false;
+    setChartDragging(false);
+  }
+
+  return (
+    <section className="dashboard-chart">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Monthly flow</p>
+          <h2>Contributions vs Donations</h2>
+        </div>
+        <div className="chart-legend">
+          <span className="legend-in">Contributions</span>
+          <span className="legend-out">Donations</span>
+        </div>
+      </div>
+      <div
+        className={`flow-chart ${chartDragging ? "dragging" : ""}`}
+        ref={chartRef}
+        aria-label="Monthly contributions and donations"
+        onPointerDown={handleChartPointerDown}
+        onPointerMove={handleChartPointerMove}
+        onPointerUp={endChartDrag}
+        onPointerCancel={endChartDrag}
+        onPointerLeave={endChartDrag}
+      >
+        {months.map((month) => (
+          <div className="flow-month" key={month.key}>
+            <div className="flow-bars">
+              <span
+                className="flow-bar flow-bar-in"
+                style={{ height: `${Math.max(6, (month.contributions / maxAmount) * 100)}%` }}
+                title={`${month.label} contributions: ${currency.format(month.contributions)}`}
+              />
+              <span
+                className="flow-bar flow-bar-out"
+                style={{ height: `${Math.max(6, (month.distributions / maxAmount) * 100)}%` }}
+                title={`${month.label} donations: ${currency.format(month.distributions)}`}
+              />
+            </div>
+            <strong>{month.label}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DashboardImpactCards({
+  contributorCount,
+  contributionCount,
+  distributionCount,
+  communityDonorTotal,
+  userContributionTotal,
+}: {
+  contributorCount: number;
+  contributionCount: number;
+  distributionCount: number;
+  communityDonorTotal: number;
+  userContributionTotal: number;
+}) {
+  const comparisonTotal = communityDonorTotal + userContributionTotal;
+  const communityPercent = comparisonTotal ? Math.round((communityDonorTotal / comparisonTotal) * 100) : 0;
+  const userPercent = comparisonTotal ? 100 - communityPercent : 0;
+  const items = [
+    { label: "Contributors", value: String(contributorCount), icon: UsersRound },
+    { label: "Contributions", value: String(contributionCount), icon: TrendingUp },
+    { label: "Donations", value: String(distributionCount), icon: HandCoins },
+  ];
+
+  return (
+    <section className="impact-grid" aria-label="Impact summary">
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <article className="impact-card" key={item.label}>
+            <Icon aria-hidden="true" />
+            <strong>{item.value}</strong>
+            <span>{item.label}</span>
+          </article>
+        );
+      })}
+      <article className="impact-card contribution-split-card">
+        <div
+          className="contribution-donut"
+          style={{
+            background: comparisonTotal
+              ? `conic-gradient(#177865 0 ${communityPercent}%, #d7a02f ${communityPercent}% 100%)`
+              : "#deeee9",
+          }}
+          role="img"
+          aria-label={`Community donor ${communityPercent} percent, user contributions ${userPercent} percent`}
+        >
+          <span>{communityPercent}%</span>
+        </div>
+        <div className="split-summary">
+          <strong>Contribution Split</strong>
+          <span>
+            <i className="split-dot split-community" />
+            Community donor {currency.format(communityDonorTotal)}
+          </span>
+          <span>
+            <i className="split-dot split-users" />
+            Users {currency.format(userContributionTotal)}
+          </span>
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function DashboardActivityTimeline({
+  activity,
+}: {
+  activity: DashboardActivity[];
+}) {
+  return (
+    <section className="activity-panel">
+      <div className="section-header">
+        <h2>Recent Activity</h2>
+      </div>
+      {activity.length ? (
+        <div className="activity-list">
+          {activity.map((item) => (
+            <article className="activity-item" key={item.id}>
+              <span className={item.kind === "Contribution" ? "activity-dot activity-in" : "activity-dot activity-out"} />
+              <div>
+                <strong>{item.label}</strong>
+                <span>
+                  {item.kind} · {formatDate(item.date)}
+                </span>
+              </div>
+              <strong>{currency.format(item.amount)}</strong>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">Recent records will appear here.</p>
+      )}
+    </section>
   );
 }
 
@@ -4950,6 +5237,85 @@ function createImageThumbnailDataUrl(file: File) {
 
     image.src = objectUrl;
   });
+}
+
+function getMonthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function isCommunityDonorContribution(donation: PublicDonationIn) {
+  return donation.user_id === COMMUNITY_DONOR_ID || donation.donor_reference_id === "COMMUNITY-DONOR";
+}
+
+function buildMonthlyFlow(
+  contributions: PublicDonationIn[],
+  distributions: DonationOut[],
+) {
+  const monthStarts = Array.from({ length: 12 }, (_, index) => {
+    const date = new Date();
+    date.setDate(1);
+    date.setHours(0, 0, 0, 0);
+    date.setMonth(date.getMonth() - (11 - index));
+    return date;
+  });
+  const monthMap = new Map<string, DashboardMonth>(
+    monthStarts.map((date) => [
+      getMonthKey(date),
+      {
+        key: getMonthKey(date),
+        label: monthFormatter.format(date),
+        contributions: 0,
+        distributions: 0,
+      },
+    ]),
+  );
+
+  contributions
+    .filter((donation) => donation.status === "success")
+    .forEach((donation) => {
+      const month = monthMap.get(getMonthKey(new Date(donation.donated_at)));
+      if (month) month.contributions += centsToCurrency(donation.amount_cents);
+    });
+
+  distributions
+    .filter((donation) => donation.status === "success")
+    .forEach((donation) => {
+      const month = monthMap.get(getMonthKey(new Date(donation.donated_at)));
+      if (month) month.distributions += centsToCurrency(donation.amount_cents);
+    });
+
+  return Array.from(monthMap.values());
+}
+
+function buildDashboardActivity(
+  contributions: PublicDonationIn[],
+  distributions: DonationOut[],
+) {
+  const contributionActivity: DashboardActivity[] = contributions
+    .filter((donation) => donation.status === "success")
+    .map((donation) => ({
+      id: `in-${donation.id}`,
+      kind: "Contribution",
+      label: donation.donor_reference_id || donation.reference_id,
+      amount: centsToCurrency(donation.amount_cents),
+      date: donation.donated_at,
+    }));
+  const distributionActivity: DashboardActivity[] = distributions
+    .filter((donation) => donation.status === "success")
+    .map((donation) => ({
+      id: `out-${donation.id}`,
+      kind: "Distribution",
+      label: donation.donee_name,
+      amount: centsToCurrency(donation.amount_cents),
+      date: donation.donated_at,
+    }));
+
+  return [...contributionActivity, ...distributionActivity]
+    .sort(
+      (first, second) =>
+        new Date(second.date).getTime() - new Date(first.date).getTime(),
+    )
+    .slice(0, 5);
 }
 
 function filterAndSortIncoming<T extends DonationIn | PublicDonationIn>(
