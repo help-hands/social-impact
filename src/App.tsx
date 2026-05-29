@@ -377,14 +377,23 @@ function PublicShell({
       {children}
       <header className="topbar public-topbar">
         <div className="brand-block">
-          <p className="eyebrow">Donation Records</p>
-          <h1>Social Impact</h1>
+          {/* <p className="eyebrow">Donation Records</p>
+          <h1>Social Impact</h1> */}
+          <img src="images/background-less-logo-trimmed.png" alt="" />
         </div>
         <div className="public-auth-actions">
-          <button className="secondary-action" type="button" onClick={onOpenSignIn}>
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={onOpenSignIn}
+          >
             Sign in
           </button>
-          <button className="primary-action-inline" type="button" onClick={onOpenSignUp}>
+          <button
+            className="primary-action-inline"
+            type="button"
+            onClick={onOpenSignUp}
+          >
             Sign up
           </button>
         </div>
@@ -412,7 +421,10 @@ function PublicShell({
       </main>
 
       {authPanel && (
-        <div className="modal-backdrop public-auth-backdrop" onClick={onCloseAuth}>
+        <div
+          className="modal-backdrop public-auth-backdrop"
+          onClick={onCloseAuth}
+        >
           {authPanel}
         </div>
       )}
@@ -431,8 +443,7 @@ function PublicHomePage({
   }>;
   stats: PublicOrganizationStats | null;
 }) {
-  const distributionCount =
-    stats?.donation_distribution_count ?? slides.length;
+  const distributionCount = stats?.donation_distribution_count ?? slides.length;
   const documentedSupport = centsToCurrency(
     stats?.documented_support_total_cents ??
       slides.reduce((sum, slide) => sum + slide.donation.amount_cents, 0),
@@ -451,7 +462,10 @@ function PublicHomePage({
             documented. Sign up to become a member.
           </p>
         </div>
-        <div className="public-intro-stats" aria-label="Public organization summary">
+        <div
+          className="public-intro-stats"
+          aria-label="Public organization summary"
+        >
           <article>
             <span>Donation distributions</span>
             <strong>{distributionCount}</strong>
@@ -505,8 +519,15 @@ function AuthPanel({
 }) {
   return (
     <section className="auth-panel">
-      <ShieldCheck aria-hidden="true" />
-      <h1>Social Impact</h1>
+      {/* <ShieldCheck aria-hidden="true" /> */}
+      <div className="auth-pannel-logo-block">
+        <img
+          src="images/background-less-favicons.png"
+          alt="Social Impact Logo"
+          className="auth-pannel-logo"
+        />
+        <h1>Social Impact</h1>
+      </div>
       <p>Sign in to manage charity donation records.</p>
 
       <div className="auth-tabs" aria-label="Authentication mode">
@@ -729,10 +750,16 @@ export function App() {
     ).size;
     const communityDonorTotal = successfulIncoming
       .filter((donation) => isCommunityDonorContribution(donation))
-      .reduce((sum, donation) => sum + centsToCurrency(donation.amount_cents), 0);
+      .reduce(
+        (sum, donation) => sum + centsToCurrency(donation.amount_cents),
+        0,
+      );
     const userContributionTotal = successfulIncoming
       .filter((donation) => !isCommunityDonorContribution(donation))
-      .reduce((sum, donation) => sum + centsToCurrency(donation.amount_cents), 0);
+      .reduce(
+        (sum, donation) => sum + centsToCurrency(donation.amount_cents),
+        0,
+      );
 
     return {
       contributorCount,
@@ -2365,7 +2392,15 @@ export function App() {
         <Toast toast={toast} />
         <section className="auth-panel">
           <ShieldCheck aria-hidden="true" />
-          <h1>Social Impact</h1>
+          {/* <h1>Social Impact</h1> */}
+          <div className="auth-pannel-logo-block">
+            <img
+              src="images/background-less-favicons.png"
+              alt="Social Impact Logo"
+              className="auth-pannel-logo"
+            />
+            <h1>Social Impact</h1>
+          </div>
           <p>
             Add your Supabase URL and publishable key in `.env.local` to start
             the app.
@@ -2437,13 +2472,20 @@ export function App() {
     );
   }
 
-  if (profileLoading && !profile) {
+  if (profileLoading && profile) {
     return (
       <main className="app-shell centered">
         <Toast toast={toast} />
         <section className="auth-panel">
-          <ShieldCheck aria-hidden="true" />
-          <h1>Social Impact</h1>
+          {/* <ShieldCheck aria-hidden="true" /> */}
+          <div className="auth-pannel-logo-block">
+            <img
+              src="images/background-less-favicons.png"
+              alt="Social Impact Logo"
+              className="auth-pannel-logo"
+            />
+            <h1>Social Impact</h1>
+          </div>
           <p>Checking your profile...</p>
         </section>
       </main>
@@ -2598,8 +2640,13 @@ export function App() {
       <Toast toast={toast} />
       <header className="topbar">
         <div className="brand-block">
-          <p className="eyebrow">Donation Records</p>
-          <h1>Social Impact</h1>
+          {/* <p className="eyebrow">Donation Records</p>
+          <h1>Social Impact</h1> */}
+          <div className="brand-block">
+            {/* <p className="eyebrow">Donation Records</p>
+          <h1>Social Impact</h1> */}
+            <img src="images/background-less-logo-trimmed.png" alt="" />
+          </div>
         </div>
         <div className="topbar-actions">
           {isAdmin && pendingDonationCount > 0 && (
@@ -3828,12 +3875,16 @@ function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
             <div className="flow-bars">
               <span
                 className="flow-bar flow-bar-in"
-                style={{ height: `${Math.max(6, (month.contributions / maxAmount) * 100)}%` }}
+                style={{
+                  height: `${Math.max(6, (month.contributions / maxAmount) * 100)}%`,
+                }}
                 title={`${month.label} contributions: ${currency.format(month.contributions)}`}
               />
               <span
                 className="flow-bar flow-bar-out"
-                style={{ height: `${Math.max(6, (month.distributions / maxAmount) * 100)}%` }}
+                style={{
+                  height: `${Math.max(6, (month.distributions / maxAmount) * 100)}%`,
+                }}
                 title={`${month.label} donations: ${currency.format(month.distributions)}`}
               />
             </div>
@@ -3859,11 +3910,21 @@ function DashboardImpactCards({
   userContributionTotal: number;
 }) {
   const comparisonTotal = communityDonorTotal + userContributionTotal;
-  const communityPercent = comparisonTotal ? Math.round((communityDonorTotal / comparisonTotal) * 100) : 0;
+  const communityPercent = comparisonTotal
+    ? Math.round((communityDonorTotal / comparisonTotal) * 100)
+    : 0;
   const userPercent = comparisonTotal ? 100 - communityPercent : 0;
   const items = [
-    { label: "Contributors", value: String(contributorCount), icon: UsersRound },
-    { label: "Contributions", value: String(contributionCount), icon: TrendingUp },
+    {
+      label: "Contributors",
+      value: String(contributorCount),
+      icon: UsersRound,
+    },
+    {
+      label: "Contributions",
+      value: String(contributionCount),
+      icon: TrendingUp,
+    },
     { label: "Donations", value: String(distributionCount), icon: HandCoins },
   ];
 
@@ -3922,7 +3983,13 @@ function DashboardActivityTimeline({
         <div className="activity-list">
           {activity.map((item) => (
             <article className="activity-item" key={item.id}>
-              <span className={item.kind === "Contribution" ? "activity-dot activity-in" : "activity-dot activity-out"} />
+              <span
+                className={
+                  item.kind === "Contribution"
+                    ? "activity-dot activity-in"
+                    : "activity-dot activity-out"
+                }
+              />
               <div>
                 <strong>{item.label}</strong>
                 <span>
@@ -5581,7 +5648,10 @@ function getMonthKey(date: Date) {
 }
 
 function isCommunityDonorContribution(donation: PublicDonationIn) {
-  return donation.user_id === COMMUNITY_DONOR_ID || donation.donor_reference_id === "COMMUNITY-DONOR";
+  return (
+    donation.user_id === COMMUNITY_DONOR_ID ||
+    donation.donor_reference_id === "COMMUNITY-DONOR"
+  );
 }
 
 function buildMonthlyFlow(

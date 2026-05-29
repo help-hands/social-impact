@@ -118,7 +118,15 @@ button:disabled {
   color: #64706c;
   line-height: 1.45;
 }
-
+.auth-pannel-logo-block {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.auth-pannel-logo {
+  width: 8rem;
+  height: 8rem;
+}
 .confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -340,6 +348,10 @@ button:disabled {
 
 .brand-block {
   min-width: 0;
+}
+.brand-block img {
+  width: 18rem;
+  max-width: 45vw;
 }
 
 .brand-block h1 {
