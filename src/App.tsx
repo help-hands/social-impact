@@ -2,6 +2,7 @@ import {
   FormEvent,
   PointerEvent,
   ReactNode,
+  WheelEvent,
   useEffect,
   useMemo,
   useRef,
@@ -196,6 +197,13 @@ type ConfirmState = {
   danger?: boolean;
   onConfirm: () => void | Promise<void>;
 } | null;
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{
+    outcome: "accepted" | "dismissed";
+    platform: string;
+  }>;
+};
 
 type DashboardMonth = {
   key: string;
@@ -255,6 +263,7 @@ const emptyDonationOutDetailForm = {
 };
 
 const COMMUNITY_DONOR_ID = "00000000-0000-4000-8000-000000000001";
+const INSTALL_PROMPT_DISMISSED_KEY = "social-impact-install-dismissed";
 
 const currency = new Intl.NumberFormat("en-LK", {
   style: "currency",
@@ -281,6 +290,41 @@ function formatDonationMethod(method: DonationMethod) {
   if (method === "online") return "Online transfer";
   if (method === "cash") return "Cash";
   return "Other";
+}
+
+function isRunningStandalone() {
+  const navigatorWithStandalone = window.navigator as Navigator & {
+    standalone?: boolean;
+  };
+
+  return (
+    (window.matchMedia?.("(display-mode: standalone)").matches ?? false) ||
+    navigatorWithStandalone.standalone === true
+  );
+}
+
+function isIOSDevice() {
+  return (
+    /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
+    (window.navigator.platform === "MacIntel" &&
+      window.navigator.maxTouchPoints > 1)
+  );
+}
+
+function getInstallPromptDismissed() {
+  try {
+    return window.localStorage.getItem(INSTALL_PROMPT_DISMISSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function markInstallPromptDismissed() {
+  try {
+    window.localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, "true");
+  } catch {
+    // Ignore storage failures so private browsing modes do not block the app.
+  }
 }
 
 function StatusPill({ status }: { status: "pending" | "success" | "failed" }) {
@@ -345,6 +389,56 @@ function ConfirmModal({
             onClick={onConfirm}
           >
             {action.confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InstallPromptModal({
+  canPrompt,
+  isIOS,
+  onDismiss,
+  onInstall,
+}: {
+  canPrompt: boolean;
+  isIOS: boolean;
+  onDismiss: () => void;
+  onInstall: () => void;
+}) {
+  return (
+    <div className="confirm-backdrop install-backdrop" onClick={onDismiss}>
+      <section
+        className="confirm-modal install-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="install-app-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <ModalCloseButton onClose={onDismiss} />
+        <div className="install-modal-icon" aria-hidden="true">
+          <img src="images/background-less-favicons.png" alt="" />
+        </div>
+        <p className="eyebrow">Native app experience</p>
+        <h2 id="install-app-title">Add to Home</h2>
+        <p>
+          {isIOS && !canPrompt
+            ? "Open the browser Share menu, then choose Add to Home Screen to launch Social Impact like an app."
+            : "Install Social Impact for quick access, full-screen viewing, and a smoother app-like experience."}
+        </p>
+        <div className="install-actions">
+          {canPrompt ? (
+            <button className="primary-button" type="button" onClick={onInstall}>
+              Add to Home
+            </button>
+          ) : (
+            <button className="primary-button" type="button" onClick={onDismiss}>
+              Got it
+            </button>
+          )}
+          <button className="text-button" type="button" onClick={onDismiss}>
+            Not now
           </button>
         </div>
       </section>
@@ -648,6 +742,13 @@ export function App() {
   const [confirmAction, setConfirmAction] = useState<ConfirmState>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [publicAuthOpen, setPublicAuthOpen] = useState(false);
+  const [installPromptEvent, setInstallPromptEvent] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [installPromptDismissed, setInstallPromptDismissed] = useState(
+    getInstallPromptDismissed,
+  );
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [isStandaloneApp, setIsStandaloneApp] = useState(isRunningStandalone);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
   const [adminCreateMode, setAdminCreateMode] =
@@ -749,6 +850,21 @@ export function App() {
     };
   }, [donationsOut, publicDonations]);
 
+  const ownDonationTotal = useMemo(
+    () =>
+      myDonations
+        .filter(
+          (donation) =>
+            donation.status === "success" &&
+            donation.user_id === session?.user.id,
+        )
+        .reduce(
+          (sum, donation) => sum + centsToCurrency(donation.amount_cents),
+          0,
+        ),
+    [myDonations, session?.user.id],
+  );
+
   const dashboardMonths = useMemo(
     () => buildMonthlyFlow(publicDonations, donationsOut),
     [donationsOut, publicDonations],
@@ -836,6 +952,60 @@ export function App() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as BeforeInstallPromptEvent);
+    };
+    const handleAppInstalled = () => {
+      markInstallPromptDismissed();
+      setInstallPromptDismissed(true);
+      setShowInstallPrompt(false);
+      setInstallPromptEvent(null);
+      setIsStandaloneApp(true);
+    };
+
+    setIsStandaloneApp(isRunningStandalone());
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener(
+        "beforeinstallprompt",
+        handleBeforeInstallPrompt,
+      );
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !session ||
+      !emailVerified ||
+      !profile ||
+      needsOnboarding ||
+      installPromptDismissed ||
+      isStandaloneApp ||
+      (!installPromptEvent && !isIOSDevice())
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowInstallPrompt(true);
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    emailVerified,
+    installPromptDismissed,
+    installPromptEvent,
+    isStandaloneApp,
+    needsOnboarding,
+    profile,
+    session,
+  ]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -1036,6 +1206,8 @@ export function App() {
     if (!supabase || !session || !profile || !emailVerified || needsOnboarding)
       return;
 
+    const currentUserId = session.user.id;
+
     async function loadRecords() {
       setLoading(true);
       setError(null);
@@ -1056,13 +1228,13 @@ export function App() {
           .select(
             "id, user_id, donated_at, amount_cents, method, reference_id, status, created_at, updated_at, document_id, is_own, donor_username, donor_reference_id",
           )
-          .order("donated_at", { ascending: false })
-          .limit(100),
+          .order("donated_at", { ascending: false }),
         supabase!
           .from("donations_in")
           .select(
             "id, user_id, donated_at, amount_cents, method, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by",
           )
+          .eq("user_id", currentUserId)
           .is("deleted_at", null)
           .order("created_at", { ascending: false }),
         supabase!
@@ -1070,8 +1242,7 @@ export function App() {
           .select(
             "id, donee_name, donated_at, amount_cents, method, reference_id, status, created_at, updated_at",
           )
-          .order("donated_at", { ascending: false })
-          .limit(100),
+          .order("donated_at", { ascending: false }),
         supabase!
           .from("donation_out_details")
           .select(
@@ -1225,6 +1396,34 @@ export function App() {
 
     if (googleError) setError(googleError.message);
     setAuthLoading(false);
+  }
+
+  async function handleInstallApp() {
+    if (!installPromptEvent) {
+      dismissInstallPrompt();
+      return;
+    }
+
+    await installPromptEvent.prompt();
+    const choice = await installPromptEvent.userChoice;
+
+    setInstallPromptEvent(null);
+    setShowInstallPrompt(false);
+
+    if (choice.outcome === "accepted") {
+      markInstallPromptDismissed();
+      setInstallPromptDismissed(true);
+      setIsStandaloneApp(true);
+      showToast("success", "Social Impact was added to your device.");
+    } else {
+      dismissInstallPrompt();
+    }
+  }
+
+  function dismissInstallPrompt() {
+    markInstallPromptDismissed();
+    setInstallPromptDismissed(true);
+    setShowInstallPrompt(false);
   }
 
   async function handleResendVerification() {
@@ -2755,6 +2954,14 @@ export function App() {
   return (
     <div className={`app-layout ${isAdmin ? "has-admin-nav" : ""}`}>
       <Toast toast={toast} />
+      {showInstallPrompt && !isStandaloneApp && (
+        <InstallPromptModal
+          canPrompt={Boolean(installPromptEvent)}
+          isIOS={isIOSDevice()}
+          onDismiss={dismissInstallPrompt}
+          onInstall={() => void handleInstallApp()}
+        />
+      )}
       <header className="topbar">
         <div className="brand-block">
           {/* <p className="eyebrow">Donation Records</p>
@@ -2843,6 +3050,11 @@ export function App() {
                   <span>Charity distributions</span>
                   <strong>{currency.format(totals.outgoingTotal)}</strong>
                   <small>{totals.outgoingCount} outgoing records</small>
+                </article>
+                <article className="metric-panel">
+                  <span>My donations</span>
+                  <strong>{currency.format(ownDonationTotal)}</strong>
+                  <small>Your successful contribution total</small>
                 </article>
               </section>
               <DashboardFlowChart months={dashboardMonths} />
@@ -3930,6 +4142,7 @@ function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartDragRef = useRef({ active: false, startX: 0, scrollLeft: 0 });
   const [chartDragging, setChartDragging] = useState(false);
+  const currentMonthKey = getMonthKey(new Date());
   const maxAmount = Math.max(
     1,
     ...months.flatMap((month) => [month.contributions, month.distributions]),
@@ -3940,9 +4153,29 @@ function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
     if (!chart || !months.length) return;
 
     window.requestAnimationFrame(() => {
-      chart.scrollLeft = chart.scrollWidth - chart.clientWidth;
+      const currentMonthIndex = Math.max(
+        0,
+        months.findIndex((month) => month.key === currentMonthKey),
+      );
+      const currentMonthElement = chart.children.item(
+        currentMonthIndex,
+      ) as HTMLElement | null;
+
+      if (!currentMonthElement) {
+        chart.scrollLeft = chart.scrollWidth - chart.clientWidth;
+        return;
+      }
+
+      chart.scrollLeft =
+        currentMonthElement.offsetLeft -
+        (chart.clientWidth - currentMonthElement.offsetWidth) / 2;
     });
-  }, [months.length]);
+  }, [currentMonthKey, months]);
+
+  function getBarHeight(amount: number) {
+    if (amount <= 0) return 0;
+    return Math.max(6, (amount / maxAmount) * 100);
+  }
 
   function handleChartPointerDown(event: PointerEvent<HTMLDivElement>) {
     const chart = chartRef.current;
@@ -3963,6 +4196,14 @@ function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
     if (!chart || !drag.active) return;
 
     chart.scrollLeft = drag.scrollLeft - (event.clientX - drag.startX);
+  }
+
+  function handleChartWheel(event: WheelEvent<HTMLDivElement>) {
+    const chart = chartRef.current;
+    if (!chart || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+
+    event.preventDefault();
+    chart.scrollLeft += event.deltaY;
   }
 
   function endChartDrag() {
@@ -3991,6 +4232,7 @@ function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
         onPointerUp={endChartDrag}
         onPointerCancel={endChartDrag}
         onPointerLeave={endChartDrag}
+        onWheel={handleChartWheel}
       >
         {months.map((month) => (
           <div className="flow-month" key={month.key}>
@@ -3998,14 +4240,14 @@ function DashboardFlowChart({ months }: { months: DashboardMonth[] }) {
               <span
                 className="flow-bar flow-bar-in"
                 style={{
-                  height: `${Math.max(6, (month.contributions / maxAmount) * 100)}%`,
+                  height: `${getBarHeight(month.contributions)}%`,
                 }}
                 title={`${month.label} contributions: ${currency.format(month.contributions)}`}
               />
               <span
                 className="flow-bar flow-bar-out"
                 style={{
-                  height: `${Math.max(6, (month.distributions / maxAmount) * 100)}%`,
+                  height: `${getBarHeight(month.distributions)}%`,
                 }}
                 title={`${month.label} donations: ${currency.format(month.distributions)}`}
               />
@@ -6034,40 +6276,72 @@ function buildMonthlyFlow(
   contributions: PublicDonationIn[],
   distributions: DonationOut[],
 ) {
-  const monthStarts = Array.from({ length: 12 }, (_, index) => {
-    const date = new Date();
-    date.setDate(1);
-    date.setHours(0, 0, 0, 0);
-    date.setMonth(date.getMonth() - (11 - index));
-    return date;
-  });
-  const monthMap = new Map<string, DashboardMonth>(
-    monthStarts.map((date) => [
-      getMonthKey(date),
-      {
-        key: getMonthKey(date),
-        label: monthFormatter.format(date),
-        contributions: 0,
-        distributions: 0,
-      },
-    ]),
+  const successfulContributions = contributions.filter(
+    (donation) => donation.status === "success",
   );
+  const successfulDistributions = distributions.filter(
+    (donation) => donation.status === "success",
+  );
+  const recordDates = [...successfulContributions, ...successfulDistributions]
+    .map((donation) => new Date(donation.donated_at))
+    .filter((date) => !Number.isNaN(date.getTime()));
+  const recordTimes = recordDates.map((date) => date.getTime());
+  const currentMonth = startOfMonth(new Date());
+  const firstRecordMonth = recordDates.length
+    ? startOfMonth(new Date(Math.min(...recordTimes)))
+    : currentMonth;
+  const lastRecordMonth = recordDates.length
+    ? startOfMonth(new Date(Math.max(...recordTimes)))
+    : currentMonth;
+  const startMonth =
+    firstRecordMonth.getTime() < currentMonth.getTime()
+      ? firstRecordMonth
+      : currentMonth;
+  const endMonth =
+    lastRecordMonth.getTime() > currentMonth.getTime()
+      ? lastRecordMonth
+      : currentMonth;
+  const monthMap = new Map<string, DashboardMonth>();
 
-  contributions
-    .filter((donation) => donation.status === "success")
-    .forEach((donation) => {
-      const month = monthMap.get(getMonthKey(new Date(donation.donated_at)));
+  for (
+    let cursor = startMonth;
+    cursor.getTime() <= endMonth.getTime();
+    cursor = addMonths(cursor, 1)
+  ) {
+    const key = getMonthKey(cursor);
+    monthMap.set(key, {
+      key,
+      label: monthFormatter.format(cursor),
+      contributions: 0,
+      distributions: 0,
+    });
+  }
+
+  successfulContributions.forEach((donation) => {
+    const date = new Date(donation.donated_at);
+    if (!Number.isNaN(date.getTime())) {
+      const month = monthMap.get(getMonthKey(date));
       if (month) month.contributions += centsToCurrency(donation.amount_cents);
-    });
+    }
+  });
 
-  distributions
-    .filter((donation) => donation.status === "success")
-    .forEach((donation) => {
-      const month = monthMap.get(getMonthKey(new Date(donation.donated_at)));
+  successfulDistributions.forEach((donation) => {
+    const date = new Date(donation.donated_at);
+    if (!Number.isNaN(date.getTime())) {
+      const month = monthMap.get(getMonthKey(date));
       if (month) month.distributions += centsToCurrency(donation.amount_cents);
-    });
+    }
+  });
 
   return Array.from(monthMap.values());
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date: Date, count: number) {
+  return new Date(date.getFullYear(), date.getMonth() + count, 1);
 }
 
 function buildDashboardActivity(

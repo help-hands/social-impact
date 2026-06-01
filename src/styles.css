@@ -156,6 +156,53 @@ button:disabled {
   margin-top: 18px;
 }
 
+.install-backdrop {
+  z-index: 40;
+}
+
+.install-modal {
+  width: min(100%, 430px);
+  padding: 24px 24px 22px;
+  text-align: left;
+}
+
+.install-modal .eyebrow {
+  margin-top: 14px;
+}
+
+.install-modal h2 {
+  margin: 4px 42px 8px 0;
+  font-size: 1.6rem;
+}
+
+.install-modal-icon {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  border: 1px solid #dbe6e1;
+  border-radius: 18px;
+  background: #e6f4ef;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.install-modal-icon img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
+.install-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.install-actions .primary-button,
+.install-actions .text-button {
+  margin-top: 0;
+}
+
 .auth-panel {
   position: relative;
   width: min(100%, 420px);
@@ -627,6 +674,10 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-top: 16px;
+}
+
+.balance-breakdown {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .metric-panel,

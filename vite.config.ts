@@ -14,7 +14,7 @@ export default defineConfig({
         name: "Social Impact",
         short_name: "Social Impact",
         description: "Together We Make A Difference",
-        theme_color: "#22c55e",
+        theme_color: "#177865",
         background_color: "#ffffff",
         display: "standalone",
         orientation: "portrait",
