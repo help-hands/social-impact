@@ -264,6 +264,7 @@ const emptyDonationOutDetailForm = {
 
 const COMMUNITY_DONOR_ID = "00000000-0000-4000-8000-000000000001";
 const INSTALL_PROMPT_DISMISSED_KEY = "social-impact-install-dismissed";
+const ACTIVE_VIEW_STORAGE_KEY = "social-impact-active-view";
 
 const currency = new Intl.NumberFormat("en-LK", {
   style: "currency",
@@ -324,6 +325,33 @@ function markInstallPromptDismissed() {
     window.localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, "true");
   } catch {
     // Ignore storage failures so private browsing modes do not block the app.
+  }
+}
+
+function isViewKey(value: string | null): value is ViewKey {
+  return (
+    value === "dashboard" ||
+    value === "my-donations" ||
+    value === "public-donations" ||
+    value === "donations-out" ||
+    value === "admin-out"
+  );
+}
+
+function getInitialActiveView(): ViewKey {
+  try {
+    const storedView = window.localStorage.getItem(ACTIVE_VIEW_STORAGE_KEY);
+    return isViewKey(storedView) ? storedView : "dashboard";
+  } catch {
+    return "dashboard";
+  }
+}
+
+function rememberActiveView(view: ViewKey) {
+  try {
+    window.localStorage.setItem(ACTIVE_VIEW_STORAGE_KEY, view);
+  } catch {
+    // Ignore storage failures so navigation still works normally.
   }
 }
 
@@ -725,7 +753,9 @@ function AuthPanel({
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
+  const [authReady, setAuthReady] = useState(false);
+  const [activeView, setActiveView] =
+    useState<ViewKey>(getInitialActiveView);
   const [publicDonations, setPublicDonations] = useState<PublicDonationIn[]>(
     [],
   );
@@ -836,6 +866,8 @@ export function App() {
   );
   const activeOnboardingStep = needsOnboarding ? "required" : onboardingStep;
   const isAdmin = profile?.role_id === 1;
+  const effectiveActiveView =
+    activeView === "admin-out" && !isAdmin ? "dashboard" : activeView;
   const visibleNavItems = useMemo(
     () =>
       isAdmin
@@ -968,16 +1000,21 @@ export function App() {
     : null;
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
 
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
+      setAuthReady(true);
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      setAuthReady(true);
       setOnboardingStep(null);
       setToast(null);
     });
@@ -1058,6 +1095,17 @@ export function App() {
       return target.closest(".content") as HTMLElement | null;
     }
 
+    function isInsideModal(target: EventTarget | null) {
+      return (
+        target instanceof HTMLElement &&
+        Boolean(
+          target.closest(
+            ".modal, .auth-panel, .confirm-modal, .modal-backdrop, .confirm-backdrop",
+          ),
+        )
+      );
+    }
+
     function getScrollTop(target: EventTarget | null) {
       const scrollableParent = getScrollableParent(target);
       return scrollableParent
@@ -1077,7 +1125,13 @@ export function App() {
     }
 
     function handleTouchStart(event: TouchEvent) {
-      if (pullRefreshing || event.touches.length !== 1) return;
+      if (
+        pullRefreshing ||
+        event.touches.length !== 1 ||
+        isInsideModal(event.target)
+      ) {
+        return;
+      }
 
       const touch = event.touches[0];
       pullGestureRef.current = {
@@ -1554,6 +1608,13 @@ export function App() {
     setShowInstallPrompt(false);
   }
 
+  function selectView(view: ViewKey) {
+    window.location.hash = "";
+    setDetailDonationOutId(null);
+    setActiveView(view);
+    rememberActiveView(view);
+  }
+
   async function handleResendVerification() {
     if (!supabase || !userEmail) return;
 
@@ -1594,6 +1655,9 @@ export function App() {
     setDeletedDonationsIn([]);
     setDeletedDonationsOut([]);
     window.location.hash = "";
+    setDetailDonationOutId(null);
+    setActiveView("dashboard");
+    rememberActiveView("dashboard");
     setDonorOptions([]);
     setAdminUsers([]);
     setAdminDonationUserId(COMMUNITY_DONOR_ID);
@@ -1612,6 +1676,12 @@ export function App() {
     window.location.hash = `out/${donationId}`;
     setDetailDonationOutId(donationId);
   }
+
+  useEffect(() => {
+    if (profile && activeView === "admin-out" && !isAdmin) {
+      selectView("dashboard");
+    }
+  }, [activeView, isAdmin, profile]);
 
   async function handleRequiredOnboardingSubmit(
     event: FormEvent<HTMLFormElement>,
@@ -2861,6 +2931,26 @@ export function App() {
     );
   }
 
+  if (!authReady) {
+    return (
+      <main className="app-shell centered">
+        <Toast toast={toast} />
+        {pullRefreshIndicator}
+        <section className="auth-panel">
+          <div className="auth-pannel-logo-block">
+            <img
+              src="images/background-less-favicons.png"
+              alt="Social Impact Logo"
+              className="auth-pannel-logo"
+            />
+            <h1>Social Impact</h1>
+          </div>
+          <p>Opening your records...</p>
+        </section>
+      </main>
+    );
+  }
+
   if (!session) {
     return (
       <PublicShell
@@ -3119,7 +3209,7 @@ export function App() {
             <button
               className="pending-banner"
               type="button"
-              onClick={() => setActiveView("public-donations")}
+              onClick={() => selectView("public-donations")}
             >
               {pendingDonationCount} pending
             </button>
@@ -3174,7 +3264,7 @@ export function App() {
             isAdmin={isAdmin}
           />
         ) : (
-          activeView === "dashboard" && (
+          effectiveActiveView === "dashboard" && (
             <>
               <DonationOutHeroCarousel slides={donationOutPageSlides} />
               <DashboardBalance
@@ -3214,7 +3304,7 @@ export function App() {
           )
         )}
 
-        {!detailDonationOutId && activeView === "my-donations" && (
+        {!detailDonationOutId && effectiveActiveView === "my-donations" && (
           <section className="record-section">
             <div className="section-header">
               <h2>My Contribution</h2>
@@ -3276,7 +3366,7 @@ export function App() {
           </section>
         )}
 
-        {!detailDonationOutId && activeView === "public-donations" && (
+        {!detailDonationOutId && effectiveActiveView === "public-donations" && (
           <section className="record-section">
             <h2>Community Contributions</h2>
             <ListControls
@@ -3327,7 +3417,7 @@ export function App() {
           </section>
         )}
 
-        {!detailDonationOutId && activeView === "donations-out" && (
+        {!detailDonationOutId && effectiveActiveView === "donations-out" && (
           <section className="record-section">
             <h2>Donations Out</h2>
             <ListControls
@@ -3376,7 +3466,7 @@ export function App() {
           </section>
         )}
 
-        {!detailDonationOutId && activeView === "admin-out" && isAdmin && (
+        {!detailDonationOutId && effectiveActiveView === "admin-out" && isAdmin && (
           <section className="record-section">
             <h2>Admin</h2>
             <div className="admin-create-tabs" aria-label="Admin section">
@@ -3536,13 +3626,11 @@ export function App() {
           const Icon = item.icon;
           return (
             <button
-              className={`${activeView === item.key ? "active" : ""} nav-${item.key}`}
+              className={`${effectiveActiveView === item.key ? "active" : ""} nav-${item.key}`}
               type="button"
               key={item.key}
               onClick={() => {
-                window.location.hash = "";
-                setDetailDonationOutId(null);
-                setActiveView(item.key);
+                selectView(item.key);
               }}
             >
               <Icon aria-hidden="true" />
