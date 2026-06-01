@@ -110,6 +110,51 @@ button:disabled {
   color: #8d231c;
 }
 
+.pull-refresh-indicator {
+  position: fixed;
+  top: -58px;
+  left: 50%;
+  z-index: 60;
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d5e4de;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #177865;
+  padding: 8px 14px;
+  box-shadow: 0 14px 34px rgba(27, 39, 35, 0.18);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.pull-refresh-indicator span {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #d9e9e3;
+  border-top-color: #177865;
+  border-radius: 50%;
+  transition: transform 80ms linear;
+}
+
+.pull-refresh-indicator strong {
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.pull-refresh-indicator.refreshing span {
+  animation: refresh-spin 700ms linear infinite;
+}
+
+@keyframes refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .confirm-backdrop {
   position: fixed;
   inset: 0;

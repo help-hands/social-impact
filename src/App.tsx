@@ -359,6 +359,29 @@ function Toast({ toast }: { toast: ToastState }) {
   return <div className={`toast toast-${toast.type}`}>{toast.message}</div>;
 }
 
+function PullToRefreshIndicator({
+  distance,
+  refreshing,
+}: {
+  distance: number;
+  refreshing: boolean;
+}) {
+  if (distance <= 0 && !refreshing) return null;
+
+  const progress = Math.min(1, distance / 96);
+
+  return (
+    <div
+      className={`pull-refresh-indicator ${refreshing ? "refreshing" : ""}`}
+      style={{ transform: `translate(-50%, ${Math.min(distance, 86)}px)` }}
+      aria-live="polite"
+    >
+      <span style={{ transform: `rotate(${progress * 220}deg)` }} />
+      <strong>{refreshing ? "" : ""}</strong>
+    </div>
+  );
+}
+
 function ConfirmModal({
   action,
   onCancel,
@@ -749,6 +772,15 @@ export function App() {
   );
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [isStandaloneApp, setIsStandaloneApp] = useState(isRunningStandalone);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
+  const pullDistanceRef = useRef(0);
+  const pullGestureRef = useRef({
+    active: false,
+    eligible: false,
+    startX: 0,
+    startY: 0,
+  });
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
   const [adminCreateMode, setAdminCreateMode] =
@@ -1017,6 +1049,102 @@ export function App() {
 
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
+
+  useEffect(() => {
+    const refreshThreshold = 96;
+
+    function getScrollableParent(target: EventTarget | null) {
+      if (!(target instanceof HTMLElement)) return null;
+      return target.closest(".content") as HTMLElement | null;
+    }
+
+    function getScrollTop(target: EventTarget | null) {
+      const scrollableParent = getScrollableParent(target);
+      return scrollableParent
+        ? scrollableParent.scrollTop
+        : (window.scrollY || document.documentElement.scrollTop || 0);
+    }
+
+    function updatePullDistance(value: number) {
+      pullDistanceRef.current = value;
+      setPullDistance(value);
+    }
+
+    function resetPullGesture() {
+      pullGestureRef.current.active = false;
+      pullGestureRef.current.eligible = false;
+      updatePullDistance(0);
+    }
+
+    function handleTouchStart(event: TouchEvent) {
+      if (pullRefreshing || event.touches.length !== 1) return;
+
+      const touch = event.touches[0];
+      pullGestureRef.current = {
+        active: true,
+        eligible: getScrollTop(event.target) <= 0,
+        startX: touch.clientX,
+        startY: touch.clientY,
+      };
+    }
+
+    function handleTouchMove(event: TouchEvent) {
+      const gesture = pullGestureRef.current;
+      if (!gesture.active || !gesture.eligible || event.touches.length !== 1) {
+        return;
+      }
+
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - gesture.startX;
+      const deltaY = touch.clientY - gesture.startY;
+
+      if (Math.abs(deltaX) > Math.abs(deltaY)) {
+        resetPullGesture();
+        return;
+      }
+
+      if (deltaY <= 0 || getScrollTop(event.target) > 0) {
+        resetPullGesture();
+        return;
+      }
+
+      event.preventDefault();
+      updatePullDistance(Math.min(124, deltaY * 0.58));
+    }
+
+    function handleTouchEnd() {
+      if (!pullGestureRef.current.active) return;
+
+      const shouldRefresh = pullDistanceRef.current >= refreshThreshold;
+      pullGestureRef.current.active = false;
+      pullGestureRef.current.eligible = false;
+
+      if (shouldRefresh) {
+        updatePullDistance(refreshThreshold);
+        setPullRefreshing(true);
+        window.setTimeout(() => window.location.reload(), 120);
+        return;
+      }
+
+      updatePullDistance(0);
+    }
+
+    document.addEventListener("touchstart", handleTouchStart, {
+      passive: true,
+    });
+    document.addEventListener("touchmove", handleTouchMove, {
+      passive: false,
+    });
+    document.addEventListener("touchend", handleTouchEnd);
+    document.addEventListener("touchcancel", resetPullGesture);
+
+    return () => {
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("touchmove", handleTouchMove);
+      document.removeEventListener("touchend", handleTouchEnd);
+      document.removeEventListener("touchcancel", resetPullGesture);
+    };
+  }, [pullRefreshing]);
 
   useEffect(() => {
     if (!supabase || session) return;
@@ -2701,10 +2829,18 @@ export function App() {
     showToast("success", isActive ? "User activated." : "User deactivated.");
   }
 
+  const pullRefreshIndicator = (
+    <PullToRefreshIndicator
+      distance={pullDistance}
+      refreshing={pullRefreshing}
+    />
+  );
+
   if (!isSupabaseConfigured) {
     return (
       <main className="app-shell centered">
         <Toast toast={toast} />
+        {pullRefreshIndicator}
         <section className="auth-panel">
           <ShieldCheck aria-hidden="true" />
           {/* <h1>Social Impact</h1> */}
@@ -2784,6 +2920,7 @@ export function App() {
         stats={publicStats}
       >
         <Toast toast={toast} />
+        {pullRefreshIndicator}
       </PublicShell>
     );
   }
@@ -2792,6 +2929,7 @@ export function App() {
     return (
       <main className="app-shell centered">
         <Toast toast={toast} />
+        {pullRefreshIndicator}
         <section className="auth-panel">
           {/* <ShieldCheck aria-hidden="true" /> */}
           <div className="auth-pannel-logo-block">
@@ -2812,6 +2950,7 @@ export function App() {
     return (
       <main className="app-shell centered">
         <Toast toast={toast} />
+        {pullRefreshIndicator}
         <section className="auth-panel">
           <Mail aria-hidden="true" />
           <h1>Verify Email</h1>
@@ -2842,6 +2981,7 @@ export function App() {
     return (
       <main className="app-shell centered">
         <Toast toast={toast} />
+        {pullRefreshIndicator}
         <section className="auth-panel profile-panel">
           <UserRound aria-hidden="true" />
           <h1>Onboarding</h1>
@@ -2906,6 +3046,7 @@ export function App() {
     return (
       <main className="app-shell centered">
         <Toast toast={toast} />
+        {pullRefreshIndicator}
         <section className="auth-panel profile-panel">
           <UserRound aria-hidden="true" />
           <h1>More Details</h1>
@@ -2954,6 +3095,7 @@ export function App() {
   return (
     <div className={`app-layout ${isAdmin ? "has-admin-nav" : ""}`}>
       <Toast toast={toast} />
+      {pullRefreshIndicator}
       {showInstallPrompt && !isStandaloneApp && (
         <InstallPromptModal
           canPrompt={Boolean(installPromptEvent)}
