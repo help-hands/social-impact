@@ -2050,6 +2050,40 @@ export function App() {
     showToast("success", "Donation out record updated.");
   }
 
+  async function handleDonationOutDocumentReplace(
+    donation: DonationOut,
+    document: UploadedDocument,
+  ) {
+    if (!supabase || !isAdmin) return;
+
+    if (donation.status !== "pending" || donation.deleted_at) {
+      showToast("error", "Only pending donation-out documents can be replaced.");
+      return;
+    }
+
+    const { data, error: updateError } = await supabase
+      .from("donations_out")
+      .update({ document_id: document.id })
+      .eq("id", donation.id)
+      .eq("status", "pending")
+      .select(
+        "id, donee_name, address, donated_at, amount_cents, method, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by",
+      )
+      .single();
+
+    if (updateError) {
+      showToast("error", updateError.message);
+      return;
+    }
+
+    const updated = data as DonationOut;
+    setDonationsOut((current) =>
+      current.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    setSelectedDonationOut(updated);
+    showToast("success", "Donation-out document replaced.");
+  }
+
   async function handleDonationOutDetailSave(
     donationId: string,
     detailForm: typeof emptyDonationOutDetailForm,
@@ -3115,6 +3149,10 @@ export function App() {
           isAdmin={isAdmin}
           onClose={() => setSelectedDonationOut(null)}
           onSave={handleDonationOutUpdate}
+          onDocumentReplace={handleDonationOutDocumentReplace}
+          onDocumentUpload={(form) =>
+            uploadDonationDocument(form, "donation_out")
+          }
           onDetailSave={handleDonationOutDetailSave}
           onMediaUpload={handleDonationOutMediaUpload}
           onMediaDelete={handleDonationOutMediaDelete}
@@ -4450,6 +4488,8 @@ function DonationOutModal({
   isAdmin,
   onClose,
   onSave,
+  onDocumentReplace,
+  onDocumentUpload,
   onDetailSave,
   onMediaUpload,
   onMediaDelete,
@@ -4463,6 +4503,11 @@ function DonationOutModal({
   isAdmin: boolean;
   onClose: () => void;
   onSave: (donationId: string, updates: Partial<DonationOut>) => void;
+  onDocumentReplace: (
+    donation: DonationOut,
+    document: UploadedDocument,
+  ) => Promise<void>;
+  onDocumentUpload: (form: DonationForm) => Promise<UploadedDocument | null>;
   onDetailSave: (
     donationId: string,
     detailForm: typeof emptyDonationOutDetailForm,
@@ -4480,6 +4525,8 @@ function DonationOutModal({
   onOpenPage: (donationId: string) => void;
 }) {
   const isDeleted = Boolean(donation.deleted_at);
+  const canReplaceDocument =
+    isAdmin && donation.status === "pending" && !isDeleted;
   const [editForm, setEditForm] = useState({
     donee_name: donation.donee_name,
     address: donation.address ?? "",
@@ -4490,6 +4537,89 @@ function DonationOutModal({
     status: donation.status,
     notes: donation.notes ?? "",
   });
+  const [replacementForm, setReplacementForm] = useState<DonationForm>({
+    donated_at: donation.donated_at.slice(0, 10),
+    amount: centsToCurrency(donation.amount_cents).toFixed(2),
+    method: donation.method,
+    reference_id: donation.reference_id,
+    notes: donation.notes ?? "",
+    file: null,
+  });
+  const [replacementErrors, setReplacementErrors] = useState<FieldErrors>({});
+  const [replacementDocument, setReplacementDocument] =
+    useState<UploadedDocument | null>(null);
+  const [replacementUploadStatus, setReplacementUploadStatus] =
+    useState<UploadStatus>("idle");
+  const [replacingDocument, setReplacingDocument] = useState(false);
+  const [savingReplacement, setSavingReplacement] = useState(false);
+
+  useEffect(() => {
+    setReplacementForm({
+      donated_at: donation.donated_at.slice(0, 10),
+      amount: centsToCurrency(donation.amount_cents).toFixed(2),
+      method: donation.method,
+      reference_id: donation.reference_id,
+      notes: donation.notes ?? "",
+      file: null,
+    });
+    setReplacementErrors({});
+    setReplacementDocument(null);
+    setReplacementUploadStatus("idle");
+    setReplacingDocument(false);
+    setSavingReplacement(false);
+  }, [donation]);
+
+  async function handleReplacementFileChange(file: File | null) {
+    const nextForm = { ...replacementForm, file };
+    setReplacementForm(nextForm);
+    setReplacementDocument(null);
+    setReplacementErrors((current) => ({ ...current, file: "" }));
+
+    if (!file) {
+      setReplacementUploadStatus("idle");
+      return;
+    }
+
+    if (!nextForm.donated_at) {
+      setReplacementUploadStatus("error");
+      setReplacementErrors((current) => ({
+        ...current,
+        donated_at: "Select donated date before uploading a document.",
+      }));
+      return;
+    }
+
+    setReplacementUploadStatus("uploading");
+    const uploadedDocument = await onDocumentUpload(nextForm);
+    if (uploadedDocument) {
+      setReplacementDocument(uploadedDocument);
+      setReplacementUploadStatus("uploaded");
+    } else {
+      setReplacementUploadStatus("error");
+    }
+  }
+
+  async function handleDocumentReplaceSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const validationErrors = validateDocumentReplacementForm(
+      replacementForm,
+      replacementDocument,
+      replacementUploadStatus,
+    );
+    setReplacementErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length) return;
+    if (!replacementDocument) return;
+
+    setSavingReplacement(true);
+    await onDocumentReplace(donation, replacementDocument);
+    setReplacementForm((current) => ({ ...current, file: null }));
+    setReplacementDocument(null);
+    setReplacementUploadStatus("idle");
+    setReplacingDocument(false);
+    setSavingReplacement(false);
+  }
 
   function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4550,6 +4680,59 @@ function DonationOutModal({
           documentId={donation.document_id}
           canView
         />
+        {canReplaceDocument && !replacingDocument && (
+          <button
+            className="secondary-action modal-action"
+            type="button"
+            onClick={() => setReplacingDocument(true)}
+          >
+            <FileText aria-hidden="true" />
+            Replace document
+          </button>
+        )}
+        {canReplaceDocument && replacingDocument && (
+          <form
+            className="donation-form modal-edit"
+            onSubmit={handleDocumentReplaceSubmit}
+          >
+            <div className="section-header">
+              <h3>Replace Document</h3>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => {
+                  setReplacingDocument(false);
+                  setReplacementForm((current) => ({ ...current, file: null }));
+                  setReplacementDocument(null);
+                  setReplacementUploadStatus("idle");
+                  setReplacementErrors({});
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="muted">
+              Upload a new image or PDF for this pending donation-out record.
+            </p>
+            <DocumentInput
+              file={replacementForm.file}
+              error={replacementErrors.file}
+              uploadedDocument={replacementDocument}
+              uploadStatus={replacementUploadStatus}
+              onFileChange={handleReplacementFileChange}
+              label="New document"
+              required
+            />
+            <button
+              type="submit"
+              disabled={
+                savingReplacement || replacementUploadStatus === "uploading"
+              }
+            >
+              {savingReplacement ? "Saving..." : "Replace document"}
+            </button>
+          </form>
+        )}
         {isAdmin && (
           <form className="donation-form modal-edit" onSubmit={handleSave}>
             <FieldGroup>
