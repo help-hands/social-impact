@@ -121,11 +121,12 @@ button:disabled {
 }
 
 .confirm-modal {
+  position: relative;
   width: min(100%, 420px);
   border: 1px solid #dce3df;
   border-radius: 8px;
   background: #ffffff;
-  padding: 18px;
+  padding: 18px 52px 18px 18px;
   box-shadow: 0 22px 52px rgba(10, 20, 17, 0.24);
 }
 
@@ -156,6 +157,7 @@ button:disabled {
 }
 
 .auth-panel {
+  position: relative;
   width: min(100%, 420px);
   border: 1px solid #d9dfd5;
   border-radius: 8px;
@@ -1305,6 +1307,7 @@ button:disabled {
 }
 
 .modal {
+  position: relative;
   width: min(100%, 560px);
   max-height: min(88vh, 720px);
   overflow: auto;
@@ -1314,8 +1317,30 @@ button:disabled {
   box-shadow: 0 22px 52px rgba(10, 20, 17, 0.24);
 }
 
+.modal-close-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #d5ddd8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #177865;
+  padding: 0;
+  box-shadow: 0 8px 22px rgba(27, 39, 35, 0.1);
+}
+
+.modal-close-button svg {
+  width: 18px;
+  height: 18px;
+}
+
 .modal h2 {
-  margin: 8px 0 16px;
+  margin: 8px 42px 16px 0;
 }
 
 .detail-row {
@@ -1889,6 +1914,7 @@ button:disabled {
 }
 
 .document-preview-modal {
+  position: relative;
   display: grid;
   gap: 12px;
   width: min(100%, 920px);
@@ -1896,7 +1922,7 @@ button:disabled {
   overflow: auto;
   border-radius: 8px;
   background: #ffffff;
-  padding: 16px;
+  padding: 16px 56px 16px 16px;
   box-shadow: 0 24px 58px rgba(10, 20, 17, 0.28);
 }
 

@@ -28,6 +28,7 @@ import {
   UsersRound,
   Video,
   WalletCards,
+  X,
 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
@@ -295,6 +296,19 @@ function EmptyState({ title }: { title: string }) {
   );
 }
 
+function ModalCloseButton({ onClose }: { onClose: () => void }) {
+  return (
+    <button
+      className="modal-close-button"
+      type="button"
+      onClick={onClose}
+      aria-label="Close modal"
+    >
+      <X aria-hidden="true" />
+    </button>
+  );
+}
+
 function Toast({ toast }: { toast: ToastState }) {
   if (!toast) return null;
 
@@ -318,6 +332,7 @@ function ConfirmModal({
         aria-modal="true"
         onClick={(event) => event.stopPropagation()}
       >
+        <ModalCloseButton onClose={onCancel} />
         <h2>{action.title}</h2>
         <p>{action.message}</p>
         <div className="confirm-actions">
@@ -498,6 +513,7 @@ function AuthPanel({
   authNotice,
   email,
   error,
+  onClose,
   onEmailChange,
   onGoogleAuth,
   onModeChange,
@@ -510,6 +526,7 @@ function AuthPanel({
   authNotice: string | null;
   email: string;
   error: string | null;
+  onClose?: () => void;
   onEmailChange: (value: string) => void;
   onGoogleAuth: () => void;
   onModeChange: (mode: AuthMode) => void;
@@ -518,7 +535,8 @@ function AuthPanel({
   password: string;
 }) {
   return (
-    <section className="auth-panel">
+    <section className={`auth-panel ${onClose ? "modal-with-close" : ""}`}>
+      {onClose && <ModalCloseButton onClose={onClose} />}
       {/* <ShieldCheck aria-hidden="true" /> */}
       <div className="auth-pannel-logo-block">
         <img
@@ -1892,7 +1910,7 @@ export function App() {
   ) {
     if (!supabase || !session) return;
 
-    if (donation.user_id !== session.user.id || donation.status === "success") {
+    if (donation.user_id !== session.user.id || donation.status !== "pending") {
       showToast("error", "This donation cannot be edited.");
       return;
     }
@@ -1902,7 +1920,7 @@ export function App() {
       .update(updates)
       .eq("id", donation.id)
       .eq("user_id", session.user.id)
-      .neq("status", "success")
+      .eq("status", "pending")
       .select(
         "id, user_id, donated_at, amount_cents, method, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by",
       )
@@ -1938,6 +1956,70 @@ export function App() {
       current?.id === updated.id ? { ...current, ...updated } : current,
     );
     showToast("success", "Donation record updated.");
+  }
+
+  async function handleDonationInDocumentReplace(
+    donation: DonationIn,
+    document: UploadedDocument,
+  ) {
+    if (!supabase || !session) return;
+
+    const canReplace =
+      donation.status === "pending" &&
+      !donation.deleted_at &&
+      (donation.user_id === session.user.id ||
+        (isAdmin && donation.user_id === COMMUNITY_DONOR_ID));
+
+    if (!canReplace) {
+      showToast("error", "Only pending donation documents can be replaced.");
+      return;
+    }
+
+    const { data, error: updateError } = await supabase
+      .from("donations_in")
+      .update({ document_id: document.id })
+      .eq("id", donation.id)
+      .eq("status", "pending")
+      .select(
+        "id, user_id, donated_at, amount_cents, method, reference_id, status, created_at, updated_at, notes, document_id, deleted_at, deleted_by",
+      )
+      .single();
+
+    if (updateError) {
+      showToast("error", updateError.message);
+      return;
+    }
+
+    const donor = adminUsers.find((user) => user.id === data.user_id);
+    const updated = {
+      ...(data as DonationIn),
+      donor_username:
+        donor?.username ?? donation.donor_username ?? profile?.username,
+      donor_reference_id:
+        donor?.reference_id ??
+        donation.donor_reference_id ??
+        profile?.reference_id,
+    };
+    const publicUpdated = toPublicDonationIn(updated, {
+      isOwn: updated.user_id === session.user.id,
+      donorUsername: updated.donor_username ?? null,
+      donorReferenceId:
+        updated.donor_reference_id ??
+        createReferenceId(updated.user_id ?? session.user.id),
+    });
+
+    setPublicDonations((current) =>
+      current.map((item) => (item.id === updated.id ? publicUpdated : item)),
+    );
+    setMyDonations((current) =>
+      current.map((item) =>
+        item.id === updated.id ? { ...item, ...updated } : item,
+      ),
+    );
+    setSelectedDonationIn((current) =>
+      current?.id === updated.id ? { ...current, ...updated } : current,
+    );
+    showToast("success", "Donation document replaced.");
   }
 
   async function handleDonationOutUpdate(
@@ -2422,6 +2504,7 @@ export function App() {
                 authNotice={authNotice}
                 email={email}
                 error={error}
+                onClose={() => setPublicAuthOpen(false)}
                 onEmailChange={setEmail}
                 onGoogleAuth={handleGoogleAuth}
                 onModeChange={(mode) => {
@@ -3010,6 +3093,7 @@ export function App() {
           onStatusChange={handleDonationInStatusChange}
           onDonorChange={handleDonationInDonorChange}
           onOwnerUpdate={handleDonationInOwnerUpdate}
+          onDocumentReplace={handleDonationInDocumentReplace}
           onDocumentUpload={(form) =>
             uploadDonationDocument(form, "donation_in")
           }
@@ -4016,6 +4100,7 @@ function DonationInModal({
   onStatusChange,
   onDonorChange,
   onOwnerUpdate,
+  onDocumentReplace,
   onDocumentUpload,
   onDeletedChange,
 }: {
@@ -4030,11 +4115,19 @@ function DonationInModal({
     donation: DonationIn,
     updates: Partial<DonationIn>,
   ) => Promise<void>;
+  onDocumentReplace: (
+    donation: DonationIn,
+    document: UploadedDocument,
+  ) => Promise<void>;
   onDocumentUpload: (form: DonationForm) => Promise<UploadedDocument | null>;
   onDeletedChange: (donation: DonationIn, deleted: boolean) => void;
 }) {
   const isDeleted = Boolean(donation.deleted_at);
-  const canOwnerEdit = isOwner && donation.status !== "success" && !isDeleted;
+  const canOwnerEdit = isOwner && donation.status === "pending" && !isDeleted;
+  const canReplaceDocument =
+    donation.status === "pending" &&
+    !isDeleted &&
+    (isOwner || (isAdmin && donation.user_id === COMMUNITY_DONOR_ID));
   const [editForm, setEditForm] = useState<DonationForm>({
     donated_at: donation.donated_at.slice(0, 10),
     amount: centsToCurrency(donation.amount_cents).toFixed(2),
@@ -4051,6 +4144,8 @@ function DonationInModal({
     useState<UploadStatus>("idle");
   const [savingEdit, setSavingEdit] = useState(false);
   const [editingOwnerRecord, setEditingOwnerRecord] = useState(false);
+  const [savingReplacement, setSavingReplacement] = useState(false);
+  const [replacingDocument, setReplacingDocument] = useState(false);
 
   useEffect(() => {
     setEditForm({
@@ -4065,6 +4160,8 @@ function DonationInModal({
     setEditDocument(null);
     setEditUploadStatus("idle");
     setEditingOwnerRecord(false);
+    setSavingReplacement(false);
+    setReplacingDocument(false);
   }, [donation]);
 
   function updateEditForm(nextForm: DonationForm) {
@@ -4134,6 +4231,28 @@ function DonationInModal({
     setSavingEdit(false);
   }
 
+  async function handleDocumentReplaceSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const validationErrors = validateDocumentReplacementForm(
+      editForm,
+      editDocument,
+      editUploadStatus,
+    );
+    setEditErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length) return;
+    if (!editDocument) return;
+
+    setSavingReplacement(true);
+    await onDocumentReplace(donation, editDocument);
+    setEditForm((current) => ({ ...current, file: null }));
+    setEditDocument(null);
+    setEditUploadStatus("idle");
+    setReplacingDocument(false);
+    setSavingReplacement(false);
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <section
@@ -4142,6 +4261,7 @@ function DonationInModal({
         aria-modal="true"
         onClick={(event) => event.stopPropagation()}
       >
+        <ModalCloseButton onClose={onClose} />
         <h2>{donation.reference_id}</h2>
         <DetailRow
           label="Amount"
@@ -4183,6 +4303,16 @@ function DonationInModal({
           >
             <Edit3 aria-hidden="true" />
             Edit my record
+          </button>
+        )}
+        {canReplaceDocument && !editingOwnerRecord && !replacingDocument && (
+          <button
+            className="secondary-action modal-action"
+            type="button"
+            onClick={() => setReplacingDocument(true)}
+          >
+            <FileText aria-hidden="true" />
+            Replace document
           </button>
         )}
         {isAdmin && (
@@ -4262,9 +4392,50 @@ function DonationInModal({
             </button>
           </form>
         )}
-        {isOwner && donation.status === "success" && (
+        {canReplaceDocument && replacingDocument && (
+          <form
+            className="donation-form modal-edit"
+            onSubmit={handleDocumentReplaceSubmit}
+          >
+            <div className="section-header">
+              <h3>Replace Document</h3>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => {
+                  setReplacingDocument(false);
+                  setEditForm((current) => ({ ...current, file: null }));
+                  setEditDocument(null);
+                  setEditUploadStatus("idle");
+                  setEditErrors({});
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="muted">
+              Upload a new image or PDF for this pending donation record.
+            </p>
+            <DocumentInput
+              file={editForm.file}
+              error={editErrors.file}
+              uploadedDocument={editDocument}
+              uploadStatus={editUploadStatus}
+              onFileChange={handleEditFileChange}
+              label="New document"
+              required
+            />
+            <button
+              type="submit"
+              disabled={savingReplacement || editUploadStatus === "uploading"}
+            >
+              {savingReplacement ? "Saving..." : "Replace document"}
+            </button>
+          </form>
+        )}
+        {isOwner && donation.status !== "pending" && (
           <p className="muted">
-            This donation is approved, so it can no longer be edited.
+            This donation is no longer pending, so it can no longer be edited.
           </p>
         )}
       </section>
@@ -4343,6 +4514,7 @@ function DonationOutModal({
         aria-modal="true"
         onClick={(event) => event.stopPropagation()}
       >
+        <ModalCloseButton onClose={onClose} />
         <h2>{donation.donee_name}</h2>
         <DetailRow
           label="Amount"
@@ -5344,6 +5516,7 @@ function DocumentPreviewModal({
         aria-modal="true"
         onClick={(event) => event.stopPropagation()}
       >
+        <ModalCloseButton onClose={onClose} />
         <div className="section-header">
           <h3>{document.file_name}</h3>
           <div className="document-actions">
@@ -5416,6 +5589,26 @@ function validateDonationEditForm(
     errors.reference_id = "Reference ID is required.";
   if (!form.amount || Number(form.amount) <= 0)
     errors.amount = "Amount must be greater than zero.";
+  if (form.file && uploadStatus === "uploading")
+    errors.file = "Document is still uploading.";
+  if (form.file && uploadStatus === "error")
+    errors.file = "Document upload failed. Replace the file and try again.";
+  if (form.file && uploadStatus !== "uploading" && !uploadedDocument)
+    errors.file = "Document must be uploaded before saving.";
+  if (form.file && !isValidDocumentFile(form.file))
+    errors.file = "Upload an image or PDF document.";
+
+  return errors;
+}
+
+function validateDocumentReplacementForm(
+  form: DonationForm,
+  uploadedDocument: UploadedDocument | null,
+  uploadStatus: UploadStatus,
+) {
+  const errors: FieldErrors = {};
+
+  if (!form.file) errors.file = "Select the replacement document.";
   if (form.file && uploadStatus === "uploading")
     errors.file = "Document is still uploading.";
   if (form.file && uploadStatus === "error")
