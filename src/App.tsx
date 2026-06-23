@@ -102,6 +102,7 @@ type DonationOutDetail = {
   subtitle: string | null;
   description: string | null;
   contact_info: string | null;
+  display_amount_cents: number | null;
   is_published: boolean;
   created_at: string;
   updated_at: string;
@@ -126,6 +127,7 @@ type PublicDonationOutPage = {
   donee_name: string;
   donated_at: string;
   amount_cents: number;
+  display_amount_cents: number | null;
   method: DonationMethod;
   reference_id: string;
   detail_id: string;
@@ -259,6 +261,7 @@ const emptyDonationOutDetailForm = {
   subtitle: "",
   description: "",
   contact_info: "",
+  display_amount: "",
   is_published: false,
 };
 
@@ -1212,7 +1215,7 @@ export function App() {
         supabase!
           .from("public_donation_out_pages")
           .select(
-            "id, donee_name, donated_at, amount_cents, method, reference_id, detail_id, title, subtitle, description, contact_info, detail_updated_at",
+            "id, donee_name, donated_at, amount_cents, display_amount_cents, method, reference_id, detail_id, title, subtitle, description, contact_info, detail_updated_at",
           )
           .order("donated_at", { ascending: false })
           .limit(24),
@@ -1264,6 +1267,7 @@ export function App() {
             subtitle: page.subtitle,
             description: page.description,
             contact_info: page.contact_info,
+            display_amount_cents: page.display_amount_cents,
             is_published: true,
             created_at: page.detail_updated_at,
             updated_at: page.detail_updated_at,
@@ -1428,7 +1432,7 @@ export function App() {
         supabase!
           .from("donation_out_details")
           .select(
-            "id, donation_out_id, title, subtitle, description, contact_info, is_published, created_at, updated_at",
+            "id, donation_out_id, title, subtitle, description, contact_info, display_amount_cents, is_published, created_at, updated_at",
           )
           .order("updated_at", { ascending: false }),
         supabase!
@@ -2487,12 +2491,26 @@ export function App() {
   ) {
     if (!supabase || !isAdmin) return;
 
+    const displayAmountValue = detailForm.display_amount.trim();
+    const displayAmountNumber = Number(displayAmountValue);
+
+    if (
+      displayAmountValue &&
+      (!Number.isFinite(displayAmountNumber) || displayAmountNumber <= 0)
+    ) {
+      showToast("error", "Display amount must be greater than zero.");
+      return;
+    }
+
     const payload = {
       donation_out_id: donationId,
       title: detailForm.title.trim() || null,
       subtitle: detailForm.subtitle.trim() || null,
       description: detailForm.description.trim() || null,
       contact_info: detailForm.contact_info.trim() || null,
+      display_amount_cents: displayAmountValue
+        ? currencyToCents(displayAmountValue)
+        : null,
       is_published: detailForm.is_published,
     };
 
@@ -2500,7 +2518,7 @@ export function App() {
       .from("donation_out_details")
       .upsert(payload, { onConflict: "donation_out_id" })
       .select(
-        "id, donation_out_id, title, subtitle, description, contact_info, is_published, created_at, updated_at",
+        "id, donation_out_id, title, subtitle, description, contact_info, display_amount_cents, is_published, created_at, updated_at",
       )
       .single();
 
@@ -3661,6 +3679,13 @@ function sortMedia(first: DonationOutMedia, second: DonationOutMedia) {
     first.sort_order - second.sort_order ||
     first.created_at.localeCompare(second.created_at)
   );
+}
+
+function getDonationOutDisplayAmountCents(
+  donation: DonationOut,
+  detail: DonationOutDetail | null,
+) {
+  return detail?.display_amount_cents ?? donation.amount_cents;
 }
 
 function toPublicDonationIn(
@@ -5359,6 +5384,9 @@ function DonationOutPageEditor({
       subtitle: detail?.subtitle ?? "",
       description: detail?.description ?? "",
       contact_info: detail?.contact_info ?? "",
+      display_amount: detail?.display_amount_cents
+        ? centsToCurrency(detail.display_amount_cents).toFixed(2)
+        : "",
       is_published: detail?.is_published ?? false,
     });
   }, [detail]);
@@ -5440,6 +5468,21 @@ function DonationOutPageEditor({
                 setDetailForm({
                   ...detailForm,
                   contact_info: event.target.value,
+                })
+              }
+            />
+          </FieldGroup>
+          <FieldGroup>
+            <label className="field-label">Display amount</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={detailForm.display_amount}
+              onChange={(event) =>
+                setDetailForm({
+                  ...detailForm,
+                  display_amount: event.target.value,
                 })
               }
             />
@@ -5622,6 +5665,10 @@ function DonationOutHeroCarousel({
         const offset = getSlideOffset(index);
         const isActive = offset === 0;
         const hidden = Math.abs(offset) > 2;
+        const displayAmountCents = getDonationOutDisplayAmountCents(
+          donation,
+          detail,
+        );
 
         return (
           <button
@@ -5648,7 +5695,7 @@ function DonationOutHeroCarousel({
               <h2>{detail.title || donation.donee_name}</h2>
               {detail.subtitle && <span>{detail.subtitle}</span>}
               <strong>
-                {currency.format(centsToCurrency(donation.amount_cents))}
+                {currency.format(centsToCurrency(displayAmountCents))}
               </strong>
             </div>
           </button>
@@ -5728,6 +5775,10 @@ function DonationOutDetailPage({
       !donation.deleted_at);
   const images = media.filter((item) => item.media_type === "image");
   const videos = media.filter((item) => item.media_type === "video");
+  const displayAmountCents = getDonationOutDisplayAmountCents(
+    donation,
+    detail,
+  );
 
   if (!visible) {
     return (
@@ -5792,7 +5843,7 @@ function DonationOutDetailPage({
           {detail?.subtitle && <h3>{detail.subtitle}</h3>}
           <DetailRow
             label="Cost"
-            value={currency.format(centsToCurrency(donation.amount_cents))}
+            value={currency.format(centsToCurrency(displayAmountCents))}
           />
           <DetailRow
             label="Method"
