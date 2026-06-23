@@ -5447,6 +5447,21 @@ function DonationOutPageEditor({
                 }
               />
             </FieldGroup>
+            <FieldGroup>
+              <label className="field-label">Display amount</label>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={detailForm.display_amount}
+                onChange={(event) =>
+                  setDetailForm({
+                    ...detailForm,
+                    display_amount: event.target.value,
+                  })
+                }
+              />
+            </FieldGroup>
           </div>
           <FieldGroup>
             <label className="field-label">Description</label>
@@ -5468,21 +5483,6 @@ function DonationOutPageEditor({
                 setDetailForm({
                   ...detailForm,
                   contact_info: event.target.value,
-                })
-              }
-            />
-          </FieldGroup>
-          <FieldGroup>
-            <label className="field-label">Display amount</label>
-            <input
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={detailForm.display_amount}
-              onChange={(event) =>
-                setDetailForm({
-                  ...detailForm,
-                  display_amount: event.target.value,
                 })
               }
             />
